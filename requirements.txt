@@ -1,0 +1,8 @@
+psycopg2-binary
+SQLAlchemy
+alembic
+pytest
+pytest-asyncio
+python-telegram-bot
+python-dotenv~=1.1.1
+pydantic-settings~=2.11.0

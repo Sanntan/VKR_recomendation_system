@@ -1,0 +1,12 @@
+services:
+  bot:
+    build: .
+    container_name: recommendation_bot
+    env_file:
+      - .env
+    volumes:
+      - bot_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  bot_data:
