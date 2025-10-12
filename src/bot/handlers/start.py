@@ -1,9 +1,9 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.bot.services.validation import is_valid_utmn_email
+from .main_menu import show_main_menu
 
-# Временное хранилище состояния. В будущем заменим на БД (например, Redis).
-# Ключ: user_id, Значение: состояние (например, "awaiting_email")
+# Временное хранилище состояния
 user_state = {}
 
 
@@ -28,6 +28,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Устанавливаем состояние пользователя "ожидаем email"
     user_state[user_id] = "awaiting_email"
 
+
 async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает ввод email пользователем."""
     user_id = update.effective_user.id
@@ -35,26 +36,24 @@ async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Проверяем, ожидаем ли мы email от этого пользователя
     if user_state.get(user_id) != "awaiting_email":
-        # Если нет, просим начать с /start
-        await update.message.reply_text("Пожалуйста, сначала введите команду /start")
+        # Если нет, показываем главное меню
+        await show_main_menu(update, context)
         return
 
     # Валидируем email
     if is_valid_utmn_email(user_input):
         # Email корректен
-        # TODO: Здесь будет логика сохранения email, связывания с профилем и т.д.
         success_text = (
-            "Спасибо! Ваш email принят.\n\n"
-            "Система анализирует ваш цифровой профиль и формирует персональные рекомендации...\n"
-            "Это займет некоторое время. Мы уведомим вас, когда рекомендации будут готовы."
+            "✅ Спасибо! Ваш email принят и верифицирован.\n\n"
+            "Теперь вы можете пользоваться всеми функциями бота!"
         )
         await update.message.reply_text(success_text)
 
         # Сбрасываем состояние пользователя
         user_state.pop(user_id, None)
 
-        # TODO: Запустить асинхронную задачу на анализ профиля и формирование рекомендаций.
-        # Например, отправить сообщение в очередь (RabbitMQ/Celery) или запустить background task.
+        # Показываем главное меню
+        await show_main_menu(update, context)
 
     else:
         # Email некорректен

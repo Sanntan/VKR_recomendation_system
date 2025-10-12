@@ -1,23 +1,27 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from src.bot.handlers.start import user_state
+from .main_menu import show_main_menu
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает команду /help."""
     help_text = (
-        "Список доступных команд:\n"
-        "/start - Начать работу с ботом и ввести email для идентификации.\n"
-        "/help - Показать это справочное сообщение.\n"
-        "/cancel - Отменить текущее действие (например, ввод email)."
+        "📖 *Справочная информация*\n\n"
+        "Доступные команды:\n"
+        "• /start - Начать работу с ботом\n"
+        "• /menu - Главное меню\n"
+        "• /help - Справка\n"
+        "• /cancel - Отмена текущего действия\n\n"
+        "Основные функции:\n"
+        "• 🎯 *Мои рекомендации* - персональные предложения мероприятий\n"
+        "• 🔍 *Поиск мероприятий* - поиск по фильтрам\n"
+        "• 📝 *Обратная связь* - ваши предложения и замечания\n\n"
+        "Для начала работы введите /start"
     )
-    await update.message.reply_text(help_text)
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает команду /cancel."""
-    user_id = update.effective_user.id
-
-    if user_state.get(user_id):
-        user_state.pop(user_id, None)
-        await update.message.reply_text("Текущее действие отменено. Чтобы начать заново, введите /start.")
-    else:
-        await update.message.reply_text("Нечего отменять. Чтобы начать работу, введите /start.")
+    await update.message.reply_text(
+        "Текущее действие отменено. Для возврата в меню введите /menu",
+        parse_mode='Markdown'
+    )
