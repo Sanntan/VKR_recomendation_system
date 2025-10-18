@@ -15,14 +15,15 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Формируем имя для приветствия
     user_name = user.first_name or user.username or "Студент"
 
-    # Приветственное сообщение
+    # Приветственное сообщение с HTML-разметкой
     welcome_text = (
         f"Здравствуйте, {user_name}!\n\n"
-        "Добро пожаловать в систему рекомендации мероприятий ТюмГУ.\n"
+        "<b>Добро пожаловать в систему рекомендации мероприятий ТюмГУ.</b>\n"
         "Для получения персональных рекомендаций нам необходимо идентифицировать вас в системе.\n\n"
-        "Пожалуйста, введите вашу **корпоративную почту** в формате:\n"
-        "`stud0000######@study.utmn.ru`"
+        "Пожалуйста, введите вашу <b>корпоративную почту</b> в формате:\n"
+        "<code>stud0000######@study.utmn.ru</code>"
     )
+
     await update.message.reply_html(welcome_text)
 
     # Устанавливаем состояние пользователя "ожидаем email"
@@ -31,12 +32,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает ввод email пользователем."""
+    # Проверяем, что сообщение существует и содержит текст
+    if not update.message or not update.message.text:
+        return
+
     user_id = update.effective_user.id
     user_input = update.message.text.strip()
 
     # Проверяем, ожидаем ли мы email от этого пользователя
     if user_state.get(user_id) != "awaiting_email":
-        # Если нет, показываем главное меню
+        # Если нет, игнорируем сообщение или показываем главное меню
         await show_main_menu(update, context)
         return
 
@@ -60,7 +65,7 @@ async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         error_text = (
             "❌ Введенный email не соответствует корпоративному формату ТюмГУ.\n\n"
             "Пожалуйста, введите email в формате:\n"
-            "`stud0000######@study.utmn.ru`\n\n"
+            "stud0000######@study.utmn.ru\n\n"
             "Убедитесь, что вы вводите его правильно."
         )
-        await update.message.reply_html(error_text)
+        await update.message.reply_text(error_text)

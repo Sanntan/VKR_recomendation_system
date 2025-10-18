@@ -84,10 +84,15 @@ async def test_handle_email_input_invalid(mock_update):
 
     await handle_email_input(mock_update, mock_context)
 
-    # Проверяем, что было отправлено сообщение об ошибке
-    mock_update.message.reply_html.assert_called_once()
-    error_message = mock_update.message.reply_html.call_args[0][0]
-    assert "не соответствует" in error_message or "формату" in error_message
+    # Проверяем, что было отправлено сообщение об ошибке через reply_text
+    mock_update.message.reply_text.assert_called_once()
+
+    # Получаем текст сообщения об ошибке
+    call_args = mock_update.message.reply_text.call_args[0][0]
+
+    # Проверяем содержание сообщения об ошибке
+    assert "не соответствует" in call_args or "формату" in call_args
+
     # Проверяем, что состояние пользователя НЕ сброшено
     from src.bot.handlers.start import user_state
     assert user_state[123] == "awaiting_email"

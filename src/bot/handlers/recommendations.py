@@ -90,19 +90,6 @@ async def show_recommendations(update: Update, context: ContextTypes.DEFAULT_TYP
         disable_web_page_preview=True
     )
 
-    # Показываем первое мероприятие
-    event = recommended_events[0]
-    context.user_data['current_recommendations'] = recommended_events
-    context.user_data['current_recommendation_index'] = 0
-
-    await update.callback_query.edit_message_text(
-        format_event_card(event),
-        reply_markup=get_recommendation_buttons(event['id']),
-        parse_mode='Markdown',
-        disable_web_page_preview=True
-    )
-
-
 async def handle_recommendation_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает feedback по рекомендациям."""
     query = update.callback_query

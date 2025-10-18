@@ -1,4 +1,5 @@
 import logging
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from src.core.config import settings
 from src.bot.handlers.start import start_handler, handle_email_input
@@ -34,7 +35,7 @@ def main() -> None:
             WAITING_FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_feedback)]
         },
         fallbacks=[CallbackQueryHandler(cancel_feedback, pattern="^back_to_menu$")],
-        per_message=True  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+        per_message=True
     )
 
     # Регистрируем обработчики команд
@@ -64,7 +65,7 @@ def main() -> None:
 
     # Запускаем бота
     logger.info("Бот запускается...")
-    application.run_polling(allowed_updates=[])
+    application.run_polling(allowed_updates=Update.ALL_TYPES)  # Теперь Update импортирован
 
 
 if __name__ == "__main__":
