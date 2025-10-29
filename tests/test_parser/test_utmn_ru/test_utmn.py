@@ -1,7 +1,6 @@
-import csv
+import csv, requests, pytest
+from src.parsing.parse_utmn import _normalize_src, BASE_URL, parse_event_page, save_to_csv, get_event_links, setup_driver
 
-from src.parsing.parse_utmn import _normalize_src, BASE_URL, parse_event_page, save_to_csv, get_event_links
-import requests
 
 # ---------- 1. Тест нормализации ссылок ----------
 def test_normalize_src_variants():
@@ -37,19 +36,21 @@ def test_parse_event_page_with_sample_html(monkeypatch):
 
     data = parse_event_page("https://fake-url")
     assert data["title"] == "Тестовое событие"
-    assert "Описание" in data["body"]
+    assert "Описание" in data["description"]
     assert data["image"].endswith("test.webp")
+    assert data["start_date"] == ""
+    assert data["end_date"] == ""
 
 
 # ---------- 3. Тест сохранения CSV (не дублирует записи) ----------
 def test_save_to_csv_adds_only_new(tmp_path):
 
     file = tmp_path / "events.csv"
-    existing = [{"title": "A", "link": "link1", "body": "x", "image": "img"}]
+    existing = [{"title": "A", "link": "link1", "description": "x", "image": "img"}]
     save_to_csv(existing, filename=file)
     new = [
-        {"title": "B", "link": "link2", "body": "y", "image": "img2"},
-        {"title": "A", "link": "link1", "body": "x", "image": "img"},
+        {"title": "B", "link": "link2", "description": "y", "image": "img2"},
+        {"title": "A", "link": "link1", "description": "x", "image": "img"},
     ]
     save_to_csv(new, filename=file)
 
@@ -80,9 +81,9 @@ def test_parse_event_page_text_normalization(monkeypatch):
     monkeypatch.setattr("src.parsing.parse_utmn.requests.get", fake_get)
 
     data = parse_event_page("x")
-    assert "\n\n" not in data["body"]
-    assert "Строка 1" in data["body"]
-    assert "Строка 2" in data["body"]
+    assert "\n\n" not in data["description"]
+    assert "Строка 1" in data["description"]
+    assert "Строка 2" in data["description"]
 
 
 # ---------- 5. Тест получения ссылок (уникальность и нормализация) ----------
@@ -132,7 +133,9 @@ def test_parse_event_page_handles_request_error(monkeypatch):
 
     result = parse_event_page("https://fake-url")
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"title", "link", "body", "image"}
+    assert set(result.keys()) == {"title", "link", "description", "start_date", "end_date", "image"}
     assert result["title"] == ""
-    assert result["body"] == ""
+    assert result["description"] == ""
     assert result["image"] == ""
+    assert result["start_date"] == ""
+    assert result["end_date"] == ""

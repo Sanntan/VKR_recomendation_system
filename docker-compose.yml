@@ -1,12 +1,28 @@
 services:
+  # --- Telegram-бот ---
   bot:
-    build: .
-    container_name: recommendation_bot
+    build:
+      context: .
+      dockerfile: src/bot/Dockerfile-bot   # путь к Dockerfile
+    container_name: vkr_bot
     env_file:
       - .env
     volumes:
-      - bot_data:/app/data
+      - ./src/bot:/app/src/bot
+      - ./src/core:/app/src/core
+    command: ["python", "-m", "src.bot.main"]
     restart: unless-stopped
 
-volumes:
-  bot_data:
+  # --- Парсер мероприятий ---
+  parser:
+    build:
+      context: .
+      dockerfile: src/parsing/Dockerfile-parser
+    container_name: vkr_parser
+    env_file:
+      - .env
+    volumes:
+      - ./src/parsing:/app/src/parsing
+      - ./src/core:/app/src/core
+    command: ["python", "-m", "src.parsing.main"]
+    restart: unless-stopped

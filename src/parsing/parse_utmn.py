@@ -1,9 +1,9 @@
 import time
 import csv
+import os
 from typing import List, Dict
 import requests
 from bs4 import BeautifulSoup
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -11,22 +11,21 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import WebDriverException
-import os
 
 BASE_URL = "https://www.utmn.ru"
 START_URL = f"{BASE_URL}/news/events/"
+COMMON_CSV_FILE = "events.csv"
 
 
-def setup_driver(headless: bool = True) -> webdriver.Chrome:
+def setup_driver(headless=True):
     options = Options()
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_experimental_option("excludeSwitches", ["enable-logging"])
-    service = Service(ChromeDriverManager().install())
+
+    service = Service("/usr/bin/chromedriver")  # Chromium path в контейнере
     driver = webdriver.Chrome(service=service, options=options)
-    driver.set_page_load_timeout(30)
     return driver
 
 
@@ -37,6 +36,23 @@ def get_event_links(start_url: str, max_clicks: int = 5, headless: bool = True, 
         driver.get(start_url)
         wait = WebDriverWait(driver, 10)
 
+        def normalize_link(href: str) -> str:
+            if not href:
+                return ""
+            href = href.strip()
+            # добавляем протокол
+            if href.startswith("//"):
+                href = "https:" + href
+            elif href.startswith("/"):
+                href = BASE_URL.rstrip("/") + href
+            elif not href.startswith("http"):
+                href = BASE_URL.rstrip("/") + "/" + href
+            # приводим к единому домену
+            href = href.replace("https://utmn.ru", BASE_URL)
+            href = href.replace("http://utmn.ru", BASE_URL)
+            href = href.replace("http://www.utmn.ru", BASE_URL)
+            return href
+
         def count_articles():
             return len(driver.find_elements(By.CSS_SELECTOR, "article.article"))
 
@@ -46,18 +62,16 @@ def get_event_links(start_url: str, max_clicks: int = 5, headless: bool = True, 
         while clicks < max_clicks:
             anchors = driver.find_elements(By.CSS_SELECTOR, "article.article .article_title a")
             for a in anchors:
-                href = a.get_attribute("href")
-                if not href:
-                    continue
-                if href.startswith("/"):
-                    href = BASE_URL.rstrip("/") + href
-                if "/news/events/" in href and href.rstrip("/") != START_URL.rstrip("/"):
+                href = normalize_link(a.get_attribute("href"))
+                if href and "/news/events/" in href and href.rstrip("/") != START_URL.rstrip("/"):
                     if href not in links:
                         links.append(href)
+
             try:
                 btn = driver.find_element(By.ID, "btn_get-events")
             except Exception:
                 break
+
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(0.4)
@@ -67,6 +81,7 @@ def get_event_links(start_url: str, max_clicks: int = 5, headless: bool = True, 
                     btn.click()
                 except Exception:
                     break
+
             clicks += 1
             waited = 0.0
             timeout = 10.0
@@ -80,18 +95,16 @@ def get_event_links(start_url: str, max_clicks: int = 5, headless: bool = True, 
                     break
             time.sleep(wait_seconds)
 
+        # финальная проверка всех ссылок
         anchors = driver.find_elements(By.CSS_SELECTOR, "article.article .article_title a")
         for a in anchors:
-            href = a.get_attribute("href")
-            if not href:
-                continue
-            if href.startswith("/"):
-                href = BASE_URL.rstrip("/") + href
-            if "/news/events/" in href and href.rstrip("/") != START_URL.rstrip("/"):
+            href = normalize_link(a.get_attribute("href"))
+            if href and "/news/events/" in href and href.rstrip("/") != START_URL.rstrip("/"):
                 if href not in links:
                     links.append(href)
     finally:
         driver.quit()
+
     return links
 
 
@@ -119,7 +132,7 @@ def parse_event_page(url: str, timeout: int = 12) -> Dict[str, str]:
         resp = requests.get(url, headers=headers, timeout=timeout)
     except requests.RequestException as e:
         print(f"[requests] Ошибка запроса {url}: {e}")
-        return {"title": "", "link": url, "body": "", "image": ""}
+        return {"title": "", "link": url, "description": "", "start_date": "", "end_date": "", "image": ""}
 
     if resp.status_code != 200:
         print(f"[requests] Предупреждение: код {resp.status_code} для {url}")
@@ -152,35 +165,33 @@ def parse_event_page(url: str, timeout: int = 12) -> Dict[str, str]:
             image_url = full
             break
 
-    body_text = " ".join(root.stripped_strings)
-    lines = [ln.rstrip() for ln in body_text.splitlines()]
-    normalized_lines = []
-    prev_empty = False
-    for ln in lines:
-        is_empty = (ln.strip() == "")
-        if is_empty and prev_empty:
-            continue
-        normalized_lines.append(ln)
-        prev_empty = is_empty
-    body_text = "\n".join(normalized_lines).strip()
+    body_text = " ".join(root.stripped_strings).strip()
 
-    return {"title": title, "link": url, "body": body_text, "image": image_url}
+    return {
+        "title": title,
+        "link": url,
+        "description": body_text,
+        "start_date": "",
+        "end_date": "",
+        "image": image_url,
+    }
 
 
-def load_existing_links(filename: str = "events.csv") -> set:
+def load_existing_links(filename: str = COMMON_CSV_FILE) -> set:
     links = set()
     if os.path.exists(filename):
         with open(filename, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                links.add(row.get("link"))
+                if row.get("link"):
+                    links.add(row["link"])
     return links
 
 
-def save_to_csv(rows: List[Dict[str, str]], filename: str = "events.csv") -> None:
-    fieldnames = ["title", "link", "body", "image"]
+def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE) -> None:
+    fieldnames = ["title", "link", "description", "start_date", "end_date", "image"]
     existing_links = load_existing_links(filename)
-    new_rows = [row for row in rows if row.get("link") not in existing_links]
+    new_rows = [row for row in rows if row.get("link") and row["link"] not in existing_links]
     if not new_rows:
         print("[CSV] Нет новых мероприятий для записи.")
         return
@@ -193,4 +204,27 @@ def save_to_csv(rows: List[Dict[str, str]], filename: str = "events.csv") -> Non
         for row in new_rows:
             out = {k: (row.get(k) or "") for k in fieldnames}
             writer.writerow(out)
-    print(f"[CSV] Записано новых мероприятий: {len(new_rows)}")
+    print(f"[CSV] Записано новых мероприятий: {len(new_rows)} → {filename}")
+
+
+def main(click_limit: int = 2, headless: bool = True):
+    print("[UTMN] Сбор ссылок через Selenium...")
+    links = get_event_links(START_URL, max_clicks=click_limit, headless=headless)
+    print(f"[UTMN] Найдено ссылок: {len(links)}")
+
+    seen = set()
+    unique_links = [l for l in links if not (l in seen or seen.add(l))]
+
+    results = []
+    for i, link in enumerate(unique_links, start=1):
+        print(f"[UTMN] ({i}/{len(unique_links)}) Парсим {link}")
+        data = parse_event_page(link)
+        results.append(data)
+        time.sleep(0.25)
+
+    save_to_csv(results, filename=COMMON_CSV_FILE)
+    print(f"[UTMN] Результат сохранён в {COMMON_CSV_FILE}")
+
+
+if __name__ == "__main__":
+    main()
