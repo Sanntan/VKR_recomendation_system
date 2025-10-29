@@ -1,8 +1,13 @@
 psycopg2-binary
-SQLAlchemy
+SQLAlchemy~=2.0.43
 alembic
-pytest
+pytest~=8.4.2
 pytest-asyncio
-python-telegram-bot
+python-telegram-bot~=22.5
 python-dotenv~=1.1.1
 pydantic-settings~=2.11.0
+requests~=2.32.5
+beautifulsoup4~=4.14.2
+selenium~=4.38.0
+webdriver-manager~=4.0.2
+pandas~=2.3.3
