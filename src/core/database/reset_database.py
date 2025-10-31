@@ -2,16 +2,16 @@
 from sqlalchemy import text
 from src.core.database.connection import engine
 
+# Порядок важен из-за внешних ключей
 TABLES = [
     "recommendations",
     "feedback",
-    "event_categories",
-    "category_directions",
+    "event_clusters",
     "events",
-    "categories",
-    "directions",
     "bot_users",
-    "students"
+    "students",
+    "directions",
+    "clusters"
 ]
 
 def reset_database():
@@ -19,8 +19,8 @@ def reset_database():
         print("⚠️  Удаление всех данных и сброс счётчиков...")
         for table in TABLES:
             conn.execute(text(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;"))
-            print(f"   • Очищена таблица {table}")
-        print("\n✅ Все таблицы очищены и счётчики ID сброшены.")
+            print(f"   • Очищена таблица: {table}")
+        print("\n✅ Все таблицы очищены и ID сброшены!")
 
 if __name__ == "__main__":
     try:

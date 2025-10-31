@@ -1,21 +1,14 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, delete
-from src.core.database.models import Events
+from src.core.database.models import Events, EventClusters
 from uuid import UUID
 from datetime import date
 
-def create_event(
-    db: Session,
-    title: str,
-    description: str = None,
-    short_description: str = None,
-    format: str = None,
-    start_date: date = None,
-    end_date: date = None,
-    link: str = None,
-    image_url: str = None,
-    vector_embedding: list[float] = None
-):
+def create_event(db: Session, title: str, description: str = None, short_description: str = None,
+                 format: str = None, start_date: date = None, end_date: date = None,
+                 link: str = None, image_url: str = None, vector_embedding: list[float] = None,
+                 cluster_ids: list[UUID] = None):
+
     event = Events(
         title=title,
         description=description,
@@ -30,6 +23,12 @@ def create_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+
+    if cluster_ids:
+        for cid in cluster_ids:
+            db.add(EventClusters(event_id=event.id, cluster_id=cid))
+        db.commit()
+
     return event
 
 def get_event_by_id(db: Session, event_id: UUID):
@@ -48,16 +47,10 @@ def update_event_info(db: Session, event_id: UUID, **kwargs):
         update(Events)
         .where(Events.id == event_id)
         .values(**kwargs)
-        .execution_options(synchronize_session="fetch")
     )
     db.execute(stmt)
     db.commit()
 
 def delete_event(db: Session, event_id: UUID):
     db.execute(delete(Events).where(Events.id == event_id))
-    db.commit()
-    return True
-
-def delete_all_events(db: Session):
-    db.execute(delete(Events))
     db.commit()

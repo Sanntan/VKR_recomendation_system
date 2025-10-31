@@ -1,43 +1,63 @@
 from sqlalchemy import (
-    Column,
-    String,
-    Integer,
-    Float,
-    Date,
-    Boolean,
-    TIMESTAMP,
-    ForeignKey,
-    text
+    Column, String, Integer, Float, Date, Boolean, TIMESTAMP,
+    ForeignKey, text
 )
 from sqlalchemy.dialects.postgresql import UUID
-from pgvector.sqlalchemy import Vector
-
-
 from sqlalchemy.orm import declarative_base, relationship
+from pgvector.sqlalchemy import Vector
 import uuid
 
 Base = declarative_base()
 
-# -------------------------------
-# Таблица студентов
-# -------------------------------
+# ==========================================
+# CLUSTERS
+# ==========================================
+class Clusters(Base):
+    __tablename__ = "clusters"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String, nullable=False)
+    centroid = Column(Vector(384))
+    created_at = Column(TIMESTAMP, server_default=text("NOW()"))
+
+    directions = relationship("Directions", back_populates="cluster")
+    event_clusters = relationship("EventClusters", back_populates="cluster")
+
+# ==========================================
+# DIRECTIONS (belongs to one cluster)
+# ==========================================
+class Directions(Base):
+    __tablename__ = "directions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String, nullable=False)
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="SET NULL"))
+    created_at = Column(TIMESTAMP, server_default=text("NOW()"))
+
+    cluster = relationship("Clusters", back_populates="directions")
+    students = relationship("Students", back_populates="direction")
+
+# ==========================================
+# STUDENTS
+# ==========================================
 class Students(Base):
     __tablename__ = "students"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     participant_id = Column(String, unique=True, nullable=False)
     institution = Column(String)
-    specialty = Column(String)
+    direction_id = Column(UUID(as_uuid=True), ForeignKey("directions.id", ondelete="SET NULL"))
     profile_embedding = Column(Vector(768))
     created_at = Column(TIMESTAMP, server_default=text("NOW()"))
 
-    # обратные связи
+    direction = relationship("Directions", back_populates="students")
     recommendations = relationship("Recommendations", back_populates="student")
     feedback = relationship("Feedback", back_populates="student")
+    bot_user = relationship("BotUsers", back_populates="student", uselist=False)
 
-# -------------------------------
-# Telegram-пользователи
-# -------------------------------
+# ==========================================
+# BOT USERS (Telegram links to student)
+# ==========================================
 class BotUsers(Base):
     __tablename__ = "bot_users"
 
@@ -48,38 +68,11 @@ class BotUsers(Base):
     email = Column(String)
     is_linked = Column(Boolean, default=False)
 
-# -------------------------------
-# Направления
-# -------------------------------
-class Directions(Base):
-    __tablename__ = "directions"
+    student = relationship("Students", back_populates="bot_user")
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String, nullable=False)
-
-# -------------------------------
-# Категории
-# -------------------------------
-class Categories(Base):
-    __tablename__ = "categories"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String, nullable=False)
-    created_at = Column(TIMESTAMP, server_default=text("NOW()"))
-
-# -------------------------------
-# Связь категорий и направлений
-# -------------------------------
-class CategoryDirections(Base):
-    __tablename__ = "category_directions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"))
-    direction_id = Column(UUID(as_uuid=True), ForeignKey("directions.id", ondelete="CASCADE"))
-
-# -------------------------------
-# Мероприятия
-# -------------------------------
+# ==========================================
+# EVENTS
+# ==========================================
 class Events(Base):
     __tablename__ = "events"
 
@@ -98,23 +91,25 @@ class Events(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, server_default=text("NOW()"))
 
-    categories = relationship("EventCategories", back_populates="event")
+    clusters = relationship("EventClusters", back_populates="event")
+    recommendations = relationship("Recommendations", back_populates="event")
 
-# -------------------------------
-# Связь мероприятие ↔ категория
-# -------------------------------
-class EventCategories(Base):
-    __tablename__ = "event_categories"
+# ==========================================
+# EVENT ⇄ CLUSTER (many-to-many)
+# ==========================================
+class EventClusters(Base):
+    __tablename__ = "event_clusters"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"))
-    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"))
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"))
 
-    event = relationship("Events", back_populates="categories")
+    event = relationship("Events", back_populates="clusters")
+    cluster = relationship("Clusters", back_populates="event_clusters")
 
-# -------------------------------
-# Рекомендации
-# -------------------------------
+# ==========================================
+# RECOMMENDATIONS
+# ==========================================
 class Recommendations(Base):
     __tablename__ = "recommendations"
 
@@ -125,10 +120,11 @@ class Recommendations(Base):
     created_at = Column(TIMESTAMP, server_default=text("NOW()"))
 
     student = relationship("Students", back_populates="recommendations")
+    event = relationship("Events", back_populates="recommendations")
 
-# -------------------------------
-# Отзывы
-# -------------------------------
+# ==========================================
+# FEEDBACK
+# ==========================================
 class Feedback(Base):
     __tablename__ = "feedback"
 

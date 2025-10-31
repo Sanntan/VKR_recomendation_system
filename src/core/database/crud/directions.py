@@ -3,8 +3,8 @@ from sqlalchemy import select, delete
 from src.core.database.models import Directions
 from uuid import UUID
 
-def create_direction(db: Session, title: str):
-    direction = Directions(title=title)
+def create_direction(db: Session, title: str, cluster_id: UUID):
+    direction = Directions(title=title, cluster_id=cluster_id)
     db.add(direction)
     db.commit()
     db.refresh(direction)
