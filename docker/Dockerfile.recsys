@@ -1,0 +1,17 @@
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+RUN pip install --upgrade pip
+COPY requirements.txt pyproject.toml poetry.lock* ./
+RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; \
+    elif [ -f pyproject.toml ]; then pip install .; fi
+
+COPY . .
+
+# TODO: заменить на реальный модуль рекомендации
+CMD ["python", "-c", "print('recsys placeholder')"]

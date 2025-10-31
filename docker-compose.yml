@@ -1,15 +1,21 @@
+
+
 services:
   # --- Telegram-бот ---
   bot:
     build:
       context: .
-      dockerfile: src/bot/Dockerfile-bot   # путь к Dockerfile
+      dockerfile: docker/Dockerfile.bot
     container_name: vkr_bot
     env_file:
       - .env
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - TZ=Europe/Moscow
     volumes:
-      - ./src/bot:/app/src/bot
-      - ./src/core:/app/src/core
+      - ./src:/app/src
     command: ["python", "-m", "src.bot.main"]
     restart: unless-stopped
 
@@ -17,12 +23,19 @@ services:
   parser:
     build:
       context: .
-      dockerfile: src/parsing/Dockerfile-parser
+      dockerfile: docker/Dockerfile.parser
     container_name: vkr_parser
     env_file:
       - .env
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - TZ=Europe/Moscow
+      - CHROME_BIN=/usr/bin/chromium
+      - CHROMEDRIVER=/usr/bin/chromedriver
+    shm_size: "1gb"
     volumes:
-      - ./src/parsing:/app/src/parsing
-      - ./src/core:/app/src/core
+      - ./src:/app/src
     command: ["python", "-m", "src.parsing.main"]
     restart: unless-stopped

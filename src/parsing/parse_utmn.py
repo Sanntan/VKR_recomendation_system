@@ -24,7 +24,8 @@ def setup_driver(headless=True):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
-    service = Service("/usr/bin/chromedriver")  # Chromium path в контейнере
+    driver_path = ChromeDriverManager().install()
+    service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
