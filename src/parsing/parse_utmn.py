@@ -133,7 +133,7 @@ def parse_event_page(url: str, timeout: int = 12) -> Dict[str, str]:
         resp = requests.get(url, headers=headers, timeout=timeout)
     except requests.RequestException as e:
         print(f"[requests] Ошибка запроса {url}: {e}")
-        return {"title": "", "link": url, "description": "", "start_date": "", "end_date": "", "image": ""}
+        return {"title": "", "link": url, "description": "", "start_date": "", "end_date": "", "image": "", "online": "false"}
 
     if resp.status_code != 200:
         print(f"[requests] Предупреждение: код {resp.status_code} для {url}")
@@ -168,6 +168,10 @@ def parse_event_page(url: str, timeout: int = 12) -> Dict[str, str]:
 
     body_text = " ".join(root.stripped_strings).strip()
 
+
+    # Для UTMN по умолчанию устанавливаем False (оффлайн)
+    online = False
+
     return {
         "title": title,
         "link": url,
@@ -175,6 +179,7 @@ def parse_event_page(url: str, timeout: int = 12) -> Dict[str, str]:
         "start_date": "",
         "end_date": "",
         "image": image_url,
+        "online": str(online).lower(),  # Сохраняем как "true" или "false" в CSV
     }
 
 
@@ -190,7 +195,7 @@ def load_existing_links(filename: str = COMMON_CSV_FILE) -> set:
 
 
 def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE) -> None:
-    fieldnames = ["title", "link", "description", "start_date", "end_date", "image"]
+    fieldnames = ["title", "link", "description", "start_date", "end_date", "image", "online"]
     existing_links = load_existing_links(filename)
     new_rows = [row for row in rows if row.get("link") and row["link"] not in existing_links]
     if not new_rows:
@@ -203,13 +208,13 @@ def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE) -> 
         if not file_exists:
             writer.writeheader()
         for row in new_rows:
-            out = {k: (row.get(k) or "") for k in fieldnames}
+            out = {k: (row.get(k) or "false" if k == "online" else row.get(k) or "") for k in fieldnames}
             writer.writerow(out)
     print(f"[CSV] Записано новых мероприятий: {len(new_rows)} → {filename}")
 
 
 def main(click_limit: int = 2, headless: bool = True):
-    print("[UTMN] Сбор ссылок через Selenium...")
+    print("[UTMN] Сбор ссылок...")
     links = get_event_links(START_URL, max_clicks=click_limit, headless=headless)
     print(f"[UTMN] Найдено ссылок: {len(links)}")
 
@@ -218,7 +223,7 @@ def main(click_limit: int = 2, headless: bool = True):
 
     results = []
     for i, link in enumerate(unique_links, start=1):
-        print(f"[UTMN] ({i}/{len(unique_links)}) Парсим {link}")
+        print(f"[UTMN] ({i}/{len(unique_links)}) {link}")
         data = parse_event_page(link)
         results.append(data)
         time.sleep(0.25)

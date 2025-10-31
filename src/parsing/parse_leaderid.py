@@ -50,9 +50,10 @@ def get_event_links(
     scroll_limit: int = 10,
     wait_seconds: float = 2.0,
     headless: bool = False,
-) -> List[str]:
+) -> List[Dict[str, str]]:
     """Прокручивает страницу Leader-ID и собирает ссылки на мероприятия,
-       исключая те, где в названии есть '#АП ТюмГУ'."""
+       исключая те, где в названии есть '#АП ТюмГУ'.
+       Возвращает список словарей с ключами 'link' и 'online'."""
     driver = setup_driver(headless=headless)
     driver.get(start_url)
     time.sleep(4)  # дождаться загрузки
@@ -62,7 +63,7 @@ def get_event_links(
     result_links = []
 
     for i in range(scroll_limit):
-        print(f"[Scroll] Прокрутка {i + 1}/{scroll_limit}...")
+        print(f"[Scroll] {i + 1}/{scroll_limit}...")
         smooth_scroll(driver, step=400, delay=0.5)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -78,8 +79,21 @@ def get_event_links(
             if "#АП ТюмГУ" in title:
                 continue
 
+            # Проверяем наличие тега "Онлайн" в карточке мероприятия
+            online = False
+            # Ищем кнопки с классом app-card-event__category внутри карточки
+            category_buttons = card.select("button.app-card-event__category")
+            for button in category_buttons:
+                button_text = button.get_text(strip=True)
+                if button_text == "Онлайн":
+                    online = True
+                    break
+
             seen_links.add(link)
-            result_links.append(link)
+            result_links.append({
+                "link": link,
+                "online": str(online).lower()
+            })
 
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height:
@@ -87,7 +101,6 @@ def get_event_links(
         last_height = new_height
 
     driver.quit()
-    print(f"[Collect] Собрано {len(result_links)} ссылок без '#АП ТюмГУ'")
     return result_links
 
 
@@ -105,8 +118,14 @@ def _normalize_src(src: str) -> str:
     return BASE_URL.rstrip("/") + "/" + s
 
 
-def parse_event_page(url: str, timeout: int = 15) -> Dict[str, str]:
-    """Парсит страницу конкретного мероприятия Leader-ID."""
+def parse_event_page(url: str, timeout: int = 15, online: str = "false") -> Dict[str, str]:
+    """Парсит страницу конкретного мероприятия Leader-ID.
+    
+    Args:
+        url: URL страницы мероприятия
+        timeout: Таймаут для запроса
+        online: Информация об онлайн/оффлайн ("true" или "false")
+    """
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -125,6 +144,7 @@ def parse_event_page(url: str, timeout: int = 15) -> Dict[str, str]:
             "start_date": "",
             "end_date": "",
             "image": "",
+            "online": "false",
         }
 
     if resp.status_code != 200:
@@ -172,6 +192,9 @@ def parse_event_page(url: str, timeout: int = 15) -> Dict[str, str]:
             networking.decompose()
         description = " ".join(about_node.stripped_strings)
 
+    # Информация об онлайн/оффлайн уже определена при сборе ссылок
+    # Используем переданный параметр
+
     return {
         "title": title,
         "link": url,
@@ -179,6 +202,7 @@ def parse_event_page(url: str, timeout: int = 15) -> Dict[str, str]:
         "start_date": start_date,
         "end_date": end_date,
         "image": image,
+        "online": online,  # Используем переданное значение
     }
 
 
@@ -269,7 +293,7 @@ def load_existing_links(filename: str = COMMON_CSV_FILE) -> set:
 
 
 def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE):
-    fieldnames = ["title", "link", "description", "start_date", "end_date", "image"]
+    fieldnames = ["title", "link", "description", "start_date", "end_date", "image", "online"]
     existing_links = load_existing_links(filename)
     new_rows = [r for r in rows if r.get("link") and r["link"] not in existing_links]
 
@@ -285,7 +309,7 @@ def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE):
         if not file_exists:
             writer.writeheader()
         for row in new_rows:
-            out = {k: (row.get(k) or "") for k in fieldnames}
+            out = {k: (row.get(k) or "false" if k == "online" else row.get(k) or "") for k in fieldnames}
             writer.writerow(out)
 
     print(f"[CSV] Записано новых мероприятий: {len(new_rows)} → {filename}")
@@ -293,13 +317,15 @@ def save_to_csv(rows: List[Dict[str, str]], filename: str = COMMON_CSV_FILE):
 
 def main(headless: bool = False):
     print("[LeaderID] Сбор ссылок...")
-    links = get_event_links(START_URL, scroll_limit=10, wait_seconds=2.5, headless=headless)
-    print(f"[LeaderID] Найдено {len(links)} ссылок для парсинга")
+    event_data = get_event_links(START_URL, scroll_limit=10, wait_seconds=2.5, headless=headless)
+    print(f"[LeaderID] Найдено ссылок: {len(event_data)}")
 
     results = []
-    for i, link in enumerate(links, 1):
-        print(f"[LeaderID] ({i}/{len(links)}) Парсим {link}")
-        data = parse_event_page(link)
+    for i, event_info in enumerate(event_data, 1):
+        link = event_info["link"]
+        online = event_info["online"]
+        print(f"[LeaderID] ({i}/{len(event_data)}) {link}")
+        data = parse_event_page(link, online=online)
         results.append(data)
         time.sleep(0.4)
 
