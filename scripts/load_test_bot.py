@@ -1,8 +1,10 @@
-"""Инструмент нагрузочного тестирования телеграм-бота без обращения к Bot API.
+"""Инструмент нагрузочного тестирования телеграм-бота.
 
-Скрипт разворачивает ``Application`` бота с подмененным транспортом запросов и
-эмулирует интенсивное взаимодействие нескольких пользователей. По итогам
-прогона формируются агрегированные метрики и подробные логи для анализа.
+По умолчанию скрипт разворачивает ``Application`` бота с подмененным транспортом
+запросов и эмулирует интенсивное взаимодействие нескольких пользователей
+внутри процесса (синтетический режим). Дополнительно доступен режим ``live``:
+в нём используется реальный Bot API Telegram и сценарии отправляются в указанные
+чаты, что позволяет проверить поведение бота в реальной среде.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.request import BaseRequest, RequestData
 
@@ -30,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+load_dotenv()
 os.environ.setdefault("BOT_TOKEN", "TEST:TOKEN")
 
 from src.bot.main import build_application
@@ -179,11 +183,17 @@ class LoadTestMetrics:
 class ScenarioFactory:
     """Формирует последовательность ``Update`` для симуляции пользователя."""
 
-    def __init__(self, bot, valid_email_ratio: float) -> None:  # type: ignore[no-untyped-def]
+    def __init__(
+        self,
+        bot,  # type: ignore[no-untyped-def]
+        valid_email_ratio: float,
+        scenario: str = "full",
+    ) -> None:
         self.bot = bot
         self.valid_email_ratio = valid_email_ratio
         self._update_ids = count(start=1)
         self._message_ids = count(start=10_000)
+        self.scenario = scenario
 
     def _base_user(self, user_id: int) -> Dict[str, Any]:
         return {
@@ -251,6 +261,11 @@ class ScenarioFactory:
         if not valid:
             return updates
 
+        if self.scenario == "simple":
+            updates.append(self._create_message_update(user_id, "Спасибо"))
+            updates.append(self._create_message_update(user_id, "Помощь"))
+            return updates
+
         updates.extend(
             [
                 self._create_callback_update(user_id, "my_recommendations", "Главное меню"),
@@ -295,17 +310,44 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     if args.seed is not None:
         random.seed(args.seed)
         logger.info("Используется фиксированный seed генератора случайных чисел: %s", args.seed)
-    request = FakeBotAPIRequest(artificial_delay=args.transport_delay)
+    if args.mode == "synthetic":
+        request = FakeBotAPIRequest(artificial_delay=args.transport_delay)
+    else:
+        request = None
+        if args.transport_delay:
+            logger.warning("Игнорируем transport-delay в режиме live")
     application = build_application(bot_token=args.token, request=request)
     await application.initialize()
 
     metrics = LoadTestMetrics()
-    scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio)
+    if args.mode == "live" and args.scenario == "full":
+        logger.warning(
+            "Сценарий 'full' содержит callback-запросы, которые невалидны для live-режима. "
+            "Переключаемся на 'simple'."
+        )
+        args.scenario = "simple"
+    scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio, args.scenario)
     semaphore = asyncio.Semaphore(args.concurrency)
 
+    chat_ids: Optional[List[int]] = None
+    if args.chat_ids:
+        try:
+            chat_ids = [int(value.strip()) for value in args.chat_ids.split(",") if value.strip()]
+        except ValueError as exc:
+            raise ValueError(
+                "Некорректный формат chat-ids. Используйте числа через запятую."
+            ) from exc
+        if not chat_ids:
+            raise ValueError("Список chat-ids пуст")
+    elif args.mode == "live":
+        raise ValueError("Для режима live необходимо указать хотя бы один chat-id")
+
     async def run_for_user(user_id: int) -> None:
+        actual_user_id = user_id
+        if chat_ids:
+            actual_user_id = chat_ids[(user_id - 1) % len(chat_ids)]
         for _ in range(args.iterations):
-            updates = scenario_factory.build_flow(user_id)
+            updates = scenario_factory.build_flow(actual_user_id)
             for update in updates:
                 await process_update(application, update, metrics, semaphore, args.inter_update_delay)
 
@@ -361,7 +403,7 @@ def parse_args() -> argparse.Namespace:
         "--transport-delay",
         type=float,
         default=0.0,
-        help="Искусственная задержка в поддельном транспортном слое Bot API",
+        help="Искусственная задержка в поддельном транспортном слое Bot API (только synthetic)",
     )
     parser.add_argument("--log-file", type=Path, default=Path("logs/load_test.log"))
     parser.add_argument(
@@ -373,11 +415,34 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Если указан, сохраняет сырые метрики задержек в CSV",
     )
-    parser.add_argument("--token", type=str, default="TEST:TOKEN", help="Токен для инициализации бота")
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=os.environ.get("BOT_TOKEN", "TEST:TOKEN"),
+        help="Токен для инициализации бота",
+    )
     parser.add_argument(
         "--log-level", type=str, default="INFO", help="Уровень логирования (DEBUG, INFO, WARNING, ERROR)"
     )
     parser.add_argument("--seed", type=int, default=None, help="Seed для генератора случайных чисел")
+    parser.add_argument(
+        "--mode",
+        choices=["synthetic", "live"],
+        default="synthetic",
+        help="Режим тестирования: synthetic (in-memory) или live (реальный Bot API)",
+    )
+    parser.add_argument(
+        "--scenario",
+        choices=["full", "simple"],
+        default="full",
+        help="Тип пользовательского сценария",
+    )
+    parser.add_argument(
+        "--chat-ids",
+        type=str,
+        default=None,
+        help="Список chat_id через запятую для live-режима",
+    )
     return parser.parse_args()
 
 
