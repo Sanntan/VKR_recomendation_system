@@ -952,7 +952,7 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     if args.mode == "live":
         rate_limiter = LiveRateLimiter(args.live_global_rate, args.live_chat_rate)
 
-    chat_ids: List[int] = []
+    chat_ids: List[int] = [457213822]
     if args.chat_ids:
         try:
             chat_ids.extend(
