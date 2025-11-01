@@ -20,54 +20,50 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
+from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 
 
-_SESSION_FACTORY = None
-_FEEDBACK_CRUD = None
-_RECOMMENDATIONS_CRUD = None
-_STUDENTS_CRUD = None
-_FEEDBACK_MODEL = None
-_STUDENTS_MODEL = None
-_EVENTS_MODEL = None
+_MODULES: dict[str, Any] | None = None
 
 
-def ensure_db_modules():
-    global _SESSION_FACTORY, _FEEDBACK_CRUD, _RECOMMENDATIONS_CRUD, _STUDENTS_CRUD
-    global _FEEDBACK_MODEL, _STUDENTS_MODEL, _EVENTS_MODEL
+def ensure_db_modules() -> dict[str, Any]:
+    global _MODULES
 
-    if _SESSION_FACTORY is None:
+    if _MODULES is None:
         from src.core.database.connection import SessionLocal as _SessionLocal  # type: ignore
-        from src.core.database.models import Feedback as _Feedback
-        from src.core.database.models import Students as _Students
-        from src.core.database.models import Events as _Events
+        from src.core.database.crud import clusters as _clusters_crud
+        from src.core.database.crud import directions as _directions_crud
         from src.core.database.crud import feedback as _feedback_crud
         from src.core.database.crud import recommendations as _recommendations_crud
         from src.core.database.crud import students as _students_crud
+        from src.core.database.models import Clusters as _Clusters
+        from src.core.database.models import Directions as _Directions
+        from src.core.database.models import Events as _Events
+        from src.core.database.models import Feedback as _Feedback
+        from src.core.database.models import Students as _Students
 
-        _SESSION_FACTORY = _SessionLocal
-        _FEEDBACK_CRUD = _feedback_crud
-        _RECOMMENDATIONS_CRUD = _recommendations_crud
-        _STUDENTS_CRUD = _students_crud
-        _FEEDBACK_MODEL = _Feedback
-        _STUDENTS_MODEL = _Students
-        _EVENTS_MODEL = _Events
+        _MODULES = {
+            "session_factory": _SessionLocal,
+            "feedback_crud": _feedback_crud,
+            "recommendations_crud": _recommendations_crud,
+            "students_crud": _students_crud,
+            "clusters_crud": _clusters_crud,
+            "directions_crud": _directions_crud,
+            "feedback_model": _Feedback,
+            "students_model": _Students,
+            "events_model": _Events,
+            "clusters_model": _Clusters,
+            "directions_model": _Directions,
+        }
 
-    return (
-        _SESSION_FACTORY,
-        _FEEDBACK_CRUD,
-        _RECOMMENDATIONS_CRUD,
-        _STUDENTS_CRUD,
-        _FEEDBACK_MODEL,
-        _STUDENTS_MODEL,
-        _EVENTS_MODEL,
-    )
+    return _MODULES
 
 
 # ---------------------------------------------------------------------------
@@ -93,18 +89,39 @@ class DataCache:
     students: list[StudentRef]
     event_ids: list[Any]
     feedback_ids: list[int]
+    cluster_ids: list[Any]
+    direction_ids: list[Any]
+    direction_to_cluster: dict[Any, Any] = field(default_factory=dict)
+    directions_by_cluster: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))
 
-    def ensure_ready(self) -> None:
-        if not self.students:
+    def has_students(self) -> bool:
+        return bool(self.students)
+
+    def has_events(self) -> bool:
+        return bool(self.event_ids)
+
+    def has_clusters(self) -> bool:
+        return bool(self.cluster_ids)
+
+    def ensure_standard_data(self) -> None:
+        if not self.has_students():
             raise RuntimeError(
-                "В таблице students нет записей — нагрузочный тест невозможен"
+                "В таблице students нет записей — профиль с рекомендациями недоступен"
             )
-        if not self.event_ids:
+        if not self.has_events():
             raise RuntimeError(
-                "В таблице events нет записей — нагрузочный тест невозможен"
+                "В таблице events нет записей — профиль с рекомендациями недоступен"
+            )
+
+    def ensure_cluster_data(self) -> None:
+        if not self.has_clusters():
+            raise RuntimeError(
+                "В таблице clusters нет записей — профиль для направлений недоступен"
             )
 
     def random_student(self, rng: random.Random) -> StudentRef:
+        if not self.students:
+            raise SkipOperation("Нет студентов для операции")
         return rng.choice(self.students)
 
     def random_student_id(self, rng: random.Random) -> Any:
@@ -114,6 +131,8 @@ class DataCache:
         return self.random_student(rng).participant_id
 
     def random_event_id(self, rng: random.Random) -> Any:
+        if not self.event_ids:
+            raise SkipOperation("Нет событий для операции")
         return rng.choice(self.event_ids)
 
     def random_feedback_id(self, rng: random.Random) -> int:
@@ -121,8 +140,47 @@ class DataCache:
             raise SkipOperation("Нет отзывов для обновления/чтения")
         return rng.choice(self.feedback_ids)
 
+    def random_cluster_id(self, rng: random.Random) -> Any:
+        if not self.cluster_ids:
+            raise SkipOperation("Нет кластеров для операции")
+        return rng.choice(self.cluster_ids)
+
+    def random_direction_id(self, rng: random.Random) -> Any:
+        if not self.direction_ids:
+            raise SkipOperation("Нет направлений для операции")
+        return rng.choice(self.direction_ids)
+
     def add_feedback_id(self, feedback_id: int) -> None:
         self.feedback_ids.append(feedback_id)
+
+    def add_direction(self, direction_id: Any, cluster_id: Any) -> None:
+        self.direction_ids.append(direction_id)
+        self.direction_to_cluster[direction_id] = cluster_id
+        if cluster_id is not None:
+            self.directions_by_cluster.setdefault(cluster_id, []).append(direction_id)
+
+    def remove_direction(self, direction_id: Any) -> None:
+        if direction_id in self.direction_ids:
+            self.direction_ids.remove(direction_id)
+        cluster_id = self.direction_to_cluster.pop(direction_id, None)
+        if cluster_id is not None:
+            bucket = self.directions_by_cluster.get(cluster_id)
+            if bucket and direction_id in bucket:
+                bucket.remove(direction_id)
+                if not bucket:
+                    self.directions_by_cluster.pop(cluster_id, None)
+
+    def update_direction_cluster(self, direction_id: Any, new_cluster: Any) -> None:
+        old_cluster = self.direction_to_cluster.get(direction_id)
+        if old_cluster is not None and old_cluster in self.directions_by_cluster:
+            bucket = self.directions_by_cluster[old_cluster]
+            if direction_id in bucket:
+                bucket.remove(direction_id)
+                if not bucket:
+                    self.directions_by_cluster.pop(old_cluster, None)
+        self.direction_to_cluster[direction_id] = new_cluster
+        if new_cluster is not None:
+            self.directions_by_cluster.setdefault(new_cluster, []).append(direction_id)
 
 
 @dataclass
@@ -130,6 +188,7 @@ class SharedState:
     cache: DataCache
     cleanup: bool
     created_feedback_ids: list[int] = field(default_factory=list)
+    created_direction_ids: list[Any] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def register_feedback(self, feedback_id: int, *, is_new: bool) -> None:
@@ -137,6 +196,28 @@ class SharedState:
             if is_new:
                 self.created_feedback_ids.append(feedback_id)
             self.cache.add_feedback_id(feedback_id)
+
+    def register_direction(self, direction_id: Any, cluster_id: Any, *, is_new: bool) -> None:
+        with self.lock:
+            if is_new:
+                self.created_direction_ids.append(direction_id)
+            self.cache.add_direction(direction_id, cluster_id)
+
+    def mark_direction_deleted(self, direction_id: Any) -> None:
+        with self.lock:
+            if direction_id in self.created_direction_ids:
+                self.created_direction_ids.remove(direction_id)
+            self.cache.remove_direction(direction_id)
+
+    def update_direction_cluster(self, direction_id: Any, cluster_id: Any) -> None:
+        with self.lock:
+            self.cache.update_direction_cluster(direction_id, cluster_id)
+
+    def pick_temp_direction(self, rng: random.Random) -> Any:
+        with self.lock:
+            if not self.created_direction_ids:
+                raise SkipOperation("Нет временных направлений для операций")
+            return rng.choice(self.created_direction_ids)
 
 
 @dataclass
@@ -300,7 +381,13 @@ def configure_logging(log_dir: Path, level: str) -> Path:
 
 
 def load_cache(prefetch: int, logger: logging.Logger) -> DataCache:
-    session_factory, _, _, _, feedback_model, students_model, events_model = ensure_db_modules()
+    modules = ensure_db_modules()
+    session_factory = modules["session_factory"]
+    feedback_model = modules["feedback_model"]
+    students_model = modules["students_model"]
+    events_model = modules["events_model"]
+    clusters_model = modules["clusters_model"]
+    directions_model = modules["directions_model"]
     if session_factory is None:
         raise RuntimeError("Не удалось инициализировать соединение с базой данных")
 
@@ -310,25 +397,46 @@ def load_cache(prefetch: int, logger: logging.Logger) -> DataCache:
         ).all()
         event_rows = session.execute(select(events_model.id).limit(prefetch)).all()
         feedback_rows = session.execute(select(feedback_model.id).limit(prefetch)).all()
+        cluster_rows = session.execute(select(clusters_model.id).limit(prefetch)).all()
+        direction_rows = session.execute(
+            select(directions_model.id, directions_model.cluster_id).limit(prefetch)
+        ).all()
 
     students = [StudentRef(id=row[0], participant_id=row[1]) for row in student_rows]
     event_ids = [row[0] for row in event_rows]
     feedback_ids = [row[0] for row in feedback_rows]
+    cluster_ids = [row[0] for row in cluster_rows]
+    direction_ids = [row[0] for row in direction_rows]
+
+    direction_to_cluster = {row[0]: row[1] for row in direction_rows}
+    directions_by_cluster: dict[Any, list[Any]] = defaultdict(list)
+    for direction_id, cluster_id in direction_to_cluster.items():
+        if cluster_id is not None:
+            directions_by_cluster[cluster_id].append(direction_id)
 
     logger.info(
-        "Предзагружено объектов: %d студентов, %d событий, %d отзывов",
+        "Предзагружено объектов: %d студентов, %d событий, %d отзывов, %d кластеров, %d направлений",
         len(students),
         len(event_ids),
         len(feedback_ids),
+        len(cluster_ids),
+        len(direction_ids),
     )
 
-    cache = DataCache(students=students, event_ids=event_ids, feedback_ids=feedback_ids)
-    cache.ensure_ready()
+    cache = DataCache(
+        students=students,
+        event_ids=event_ids,
+        feedback_ids=feedback_ids,
+        cluster_ids=cluster_ids,
+        direction_ids=direction_ids,
+        direction_to_cluster=direction_to_cluster,
+        directions_by_cluster=directions_by_cluster,
+    )
     return cache
 
 
 def build_operations(profile: str, state: SharedState) -> list[OperationSpec]:
-    base_ops = {
+    rec_ops = {
         "fetch_student": OperationSpec(
             name="fetch_student",
             op_type="read",
@@ -367,7 +475,52 @@ def build_operations(profile: str, state: SharedState) -> list[OperationSpec]:
         ),
     }
 
-    profiles: dict[str, dict[str, int]] = {
+    cluster_ops = {
+        "list_clusters": OperationSpec(
+            name="list_clusters",
+            op_type="read",
+            weight=4,
+            func=op_list_clusters,
+        ),
+        "list_directions": OperationSpec(
+            name="list_directions",
+            op_type="read",
+            weight=3,
+            func=op_list_directions,
+        ),
+        "cluster_overview": OperationSpec(
+            name="cluster_overview",
+            op_type="read",
+            weight=3,
+            func=op_cluster_overview,
+        ),
+        "create_direction": OperationSpec(
+            name="create_direction",
+            op_type="write",
+            weight=2,
+            func=op_create_direction,
+        ),
+        "update_direction": OperationSpec(
+            name="update_direction",
+            op_type="write",
+            weight=2,
+            func=op_update_direction,
+        ),
+        "delete_direction": OperationSpec(
+            name="delete_direction",
+            op_type="write",
+            weight=1,
+            func=op_delete_direction,
+        ),
+        "reassign_direction": OperationSpec(
+            name="reassign_direction",
+            op_type="write",
+            weight=1,
+            func=op_reassign_direction,
+        ),
+    }
+
+    rec_profiles: dict[str, dict[str, int]] = {
         "read-heavy": {
             "fetch_student": 6,
             "fetch_recommendations": 6,
@@ -394,21 +547,63 @@ def build_operations(profile: str, state: SharedState) -> list[OperationSpec]:
         },
     }
 
-    if profile not in profiles:
+    cluster_profiles: dict[str, dict[str, int]] = {
+        "clusters-read": {
+            "list_clusters": 6,
+            "list_directions": 5,
+            "cluster_overview": 4,
+        },
+        "clusters-write": {
+            "list_clusters": 2,
+            "create_direction": 5,
+            "update_direction": 4,
+            "delete_direction": 3,
+            "reassign_direction": 3,
+        },
+        "clusters-mixed": {
+            "list_clusters": 4,
+            "list_directions": 4,
+            "cluster_overview": 3,
+            "create_direction": 3,
+            "update_direction": 2,
+            "delete_direction": 2,
+            "reassign_direction": 2,
+        },
+    }
+
+    if profile == "auto":
+        if state.cache.has_students() and state.cache.has_events():
+            profile = "mixed"
+        elif state.cache.has_clusters():
+            profile = "clusters-mixed"
+        else:
+            raise RuntimeError(
+                "Не найдено данных ни для сценария рекомендаций, ни для кластеров"
+            )
+
+    if profile in rec_profiles:
+        state.cache.ensure_standard_data()
+        selected = rec_profiles[profile]
+        base = rec_ops
+    elif profile in cluster_profiles:
+        state.cache.ensure_cluster_data()
+        selected = cluster_profiles[profile]
+        base = cluster_ops
+    else:
+        allowed = [*rec_profiles.keys(), *cluster_profiles.keys(), "auto"]
         raise ValueError(
-            f"Неизвестный профиль '{profile}'. Доступные значения: {', '.join(profiles)}"
+            f"Неизвестный профиль '{profile}'. Доступные значения: {', '.join(allowed)}"
         )
 
-    overrides = profiles[profile]
     operations: list[OperationSpec] = []
-    for key, base in base_ops.items():
-        weight = overrides.get(key, base.weight)
+    for key, weight in selected.items():
+        spec = base[key]
         operations.append(
             OperationSpec(
-                name=base.name,
-                op_type=base.op_type,
+                name=spec.name,
+                op_type=spec.op_type,
                 weight=weight,
-                func=base.func,
+                func=spec.func,
             )
         )
     return operations
@@ -429,7 +624,7 @@ COMMENT_TEMPLATES = [
 
 
 def run_with_session(func: Callable[[Any, SharedState, random.Random, Any], Any], state: SharedState, rng: random.Random, *extra: Any) -> Any:
-    session_factory, *_ = ensure_db_modules()
+    session_factory = ensure_db_modules()["session_factory"]
     if session_factory is None:
         raise RuntimeError("Сессия базы данных не инициализирована")
     with session_factory() as session:
@@ -437,34 +632,34 @@ def run_with_session(func: Callable[[Any, SharedState, random.Random, Any], Any]
 
 
 def op_fetch_student(session, state: SharedState, rng: random.Random):
-    _, _, _, students_module, _, _, _ = ensure_db_modules()
+    students_module = ensure_db_modules()["students_crud"]
     participant = state.cache.random_participant(rng)
     students_module.get_student_by_participant_id(session, participant)
 
 
 def op_fetch_recommendations(session, state: SharedState, rng: random.Random):
-    _, _, recommendations_module, _, _, _, _ = ensure_db_modules()
+    recommendations_module = ensure_db_modules()["recommendations_crud"]
     student_id = state.cache.random_student_id(rng)
     recommendations_module.get_recommendations_for_student(session, student_id, limit=20)
 
 
 def op_fetch_events(session, state: SharedState, rng: random.Random):
-    _, _, _, _, _, _, events_model = ensure_db_modules()
+    events_model = ensure_db_modules()["events_model"]
     limit = rng.randint(10, 50)
     session.execute(select(events_model.id, events_model.title).limit(limit)).all()
 
 
 def op_list_feedback(session, state: SharedState, rng: random.Random):
-    _, feedback_module, _, _, _, _, _ = ensure_db_modules()
+    feedback_module = ensure_db_modules()["feedback_crud"]
     try:
         student_id = state.cache.random_student_id(rng)
-    except IndexError:
-        raise SkipOperation("Нет студентов для чтения отзывов") from None
+    except SkipOperation as exc:
+        raise SkipOperation("Нет студентов для чтения отзывов") from exc
     feedback_module.get_feedbacks_by_student(session, student_id)
 
 
 def op_create_feedback(session, state: SharedState, rng: random.Random):
-    _, feedback_module, _, _, _, _, _ = ensure_db_modules()
+    feedback_module = ensure_db_modules()["feedback_crud"]
     student_id = state.cache.random_student_id(rng)
     rating = rng.randint(3, 5)
     comment = rng.choice(COMMENT_TEMPLATES)
@@ -478,7 +673,7 @@ def op_create_feedback(session, state: SharedState, rng: random.Random):
 
 
 def op_update_feedback(session, state: SharedState, rng: random.Random):
-    _, feedback_module, _, _, _, _, _ = ensure_db_modules()
+    feedback_module = ensure_db_modules()["feedback_crud"]
     feedback_id = state.cache.random_feedback_id(rng)
     new_rating = rng.randint(1, 5)
     new_comment = rng.choice(COMMENT_TEMPLATES)
@@ -488,6 +683,70 @@ def op_update_feedback(session, state: SharedState, rng: random.Random):
         rating=new_rating,
         comment=new_comment,
     )
+
+
+def op_list_clusters(session, state: SharedState, rng: random.Random):  # noqa: ARG001
+    clusters_module = ensure_db_modules()["clusters_crud"]
+    clusters_module.get_all_clusters(session)
+
+
+def op_list_directions(session, state: SharedState, rng: random.Random):  # noqa: ARG001
+    directions_module = ensure_db_modules()["directions_crud"]
+    limit = rng.randint(10, 100)
+    directions_module.get_all_directions(session, limit=limit)
+
+
+def op_cluster_overview(session, state: SharedState, rng: random.Random):
+    modules = ensure_db_modules()
+    clusters_model = modules["clusters_model"]
+    directions_model = modules["directions_model"]
+    cluster_id = state.cache.random_cluster_id(rng)
+    session.execute(select(clusters_model).where(clusters_model.id == cluster_id)).scalar_one_or_none()
+    session.execute(
+        select(directions_model.id, directions_model.title)
+        .where(directions_model.cluster_id == cluster_id)
+        .limit(200)
+    ).all()
+
+
+def op_create_direction(session, state: SharedState, rng: random.Random):
+    directions_module = ensure_db_modules()["directions_crud"]
+    cluster_id = state.cache.random_cluster_id(rng)
+    title = f"LoadTest Direction {uuid4().hex[:8]}"
+    direction = directions_module.create_direction(session, title=title, cluster_id=cluster_id)
+    state.register_direction(direction.id, cluster_id, is_new=True)
+
+
+def op_update_direction(session, state: SharedState, rng: random.Random):
+    modules = ensure_db_modules()
+    directions_model = modules["directions_model"]
+    direction_id = state.pick_temp_direction(rng)
+    new_title = f"Updated {uuid4().hex[:6]}"
+    session.execute(
+        update(directions_model).where(directions_model.id == direction_id).values(title=new_title)
+    )
+    session.commit()
+
+
+def op_delete_direction(session, state: SharedState, rng: random.Random):
+    directions_module = ensure_db_modules()["directions_crud"]
+    direction_id = state.pick_temp_direction(rng)
+    deleted = directions_module.delete_direction(session, direction_id)
+    if not deleted:
+        raise SkipOperation("Направление уже удалено")
+    state.mark_direction_deleted(direction_id)
+
+
+def op_reassign_direction(session, state: SharedState, rng: random.Random):
+    modules = ensure_db_modules()
+    directions_model = modules["directions_model"]
+    direction_id = state.pick_temp_direction(rng)
+    new_cluster = state.cache.random_cluster_id(rng)
+    session.execute(
+        update(directions_model).where(directions_model.id == direction_id).values(cluster_id=new_cluster)
+    )
+    session.commit()
+    state.update_direction_cluster(direction_id, new_cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +1024,9 @@ def cleanup_feedback(state: SharedState, logger: logging.Logger) -> None:
         logger.info("Во время теста не создано новых отзывов")
         return
 
-    session_factory, feedback_module, *_ = ensure_db_modules()
+    modules = ensure_db_modules()
+    session_factory = modules["session_factory"]
+    feedback_module = modules["feedback_crud"]
     if session_factory is None or feedback_module is None:
         logger.error("Не удалось инициализировать зависимости для очистки отзывов")
         return
@@ -779,13 +1040,56 @@ def cleanup_feedback(state: SharedState, logger: logging.Logger) -> None:
     logger.info("Удалено временных отзывов: %d", len(state.created_feedback_ids))
 
 
+def cleanup_directions(state: SharedState, logger: logging.Logger) -> None:
+    if not state.cleanup:
+        logger.info(
+            "Флаг очистки выключен, сохранено %d временных направлений",
+            len(state.created_direction_ids),
+        )
+        return
+    if not state.created_direction_ids:
+        logger.info("Во время теста не создано новых направлений")
+        return
+
+    modules = ensure_db_modules()
+    session_factory = modules["session_factory"]
+    directions_module = modules["directions_crud"]
+    if session_factory is None or directions_module is None:
+        logger.error("Не удалось инициализировать зависимости для очистки направлений")
+        return
+
+    initial_count = len(state.created_direction_ids)
+    with session_factory() as session:
+        for direction_id in list(state.created_direction_ids):
+            try:
+                directions_module.delete_direction(session, direction_id)
+                state.mark_direction_deleted(direction_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("Не удалось удалить временное направление %s", direction_id)
+    removed = initial_count - len(state.created_direction_ids)
+    logger.info("Удалено временных направлений: %d", removed)
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Нагрузочное тестирование базы данных Supabase")
     parser.add_argument("--duration", type=float, default=600.0, help="Желаемая длительность теста, секунды")
     parser.add_argument("--min-duration", type=float, default=600.0, help="Минимально допустимая длительность теста")
     parser.add_argument("--allow-short-runs", action="store_true", help="Разрешить запуск короче минимального времени")
     parser.add_argument("--concurrency", type=int, default=16, help="Количество параллельных воркеров")
-    parser.add_argument("--profile", choices=["read-heavy", "write-heavy", "mixed"], default="mixed", help="Профиль нагрузки")
+    parser.add_argument(
+        "--profile",
+        choices=[
+            "auto",
+            "read-heavy",
+            "write-heavy",
+            "mixed",
+            "clusters-read",
+            "clusters-write",
+            "clusters-mixed",
+        ],
+        default="auto",
+        help="Профиль нагрузки",
+    )
     parser.add_argument("--prefetch-limit", type=int, default=2000, help="Сколько записей предзагружать из справочников")
     parser.add_argument("--max-retries", type=int, default=3, help="Сколько повторов выполнять при транзиентных ошибках")
     parser.add_argument("--backoff", type=float, default=0.5, help="Базовая задержка (сек) перед повтором транзиентной ошибки")
@@ -795,7 +1099,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--per-type-file", help="JSON со сводкой по типам операций")
     parser.add_argument("--timeline-file", help="NDJSON с временной шкалой операций")
     parser.add_argument("--errors-file", help="NDJSON с ошибками и повторами")
-    parser.add_argument("--no-cleanup", action="store_true", help="Не удалять созданные во время теста отзывы")
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Не удалять созданные во время теста отзывы и направления",
+    )
     parser.add_argument("--seed", type=int, help="Фиксированный seed для генератора случайных чисел")
     parser.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"), help="Уровень логирования")
     return parser.parse_args(argv)
@@ -835,6 +1143,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
 
     cleanup_feedback(state, logger)
+    cleanup_directions(state, logger)
 
 
 if __name__ == "__main__":
