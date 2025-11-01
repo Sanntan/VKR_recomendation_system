@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -305,6 +305,55 @@ async def process_update(
             logging.getLogger(__name__).exception("Ошибка обработки обновления")
 
 
+async def _auto_discover_chat_ids(
+    bot,
+    limit: int,
+    logger: logging.Logger,
+) -> List[int]:  # type: ignore[no-untyped-def]
+    """Получает последние обновления и извлекает ``chat_id``.
+
+    Перед запуском пользователь должен отправить любое сообщение боту, чтобы
+    обновления появились в очереди ``getUpdates``. Функция считывает не более
+    ``limit`` событий, извлекает идентификаторы чатов и подтверждает их
+    обработку запросом с ``offset``.
+    """
+
+    try:
+        updates = await bot.get_updates(limit=limit, timeout=0)  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - защитное логирование
+        logger.error("Не удалось получить обновления через Bot API: %s", exc)
+        raise
+
+    chat_ids: Set[int] = set()
+    for update in updates:
+        if update.message:
+            chat_ids.add(update.message.chat.id)
+        elif update.edited_message:
+            chat_ids.add(update.edited_message.chat.id)
+        elif update.callback_query and update.callback_query.message:
+            chat_ids.add(update.callback_query.message.chat.id)
+        elif update.channel_post:
+            chat_ids.add(update.channel_post.chat.id)
+        elif update.my_chat_member:
+            chat_ids.add(update.my_chat_member.chat.id)
+        elif update.chat_member:
+            chat_ids.add(update.chat_member.chat.id)
+
+    if updates:
+        # Подтверждаем получение, чтобы Bot API не возвращал те же обновления снова.
+        last_update_id = updates[-1].update_id
+        await bot.get_updates(offset=last_update_id + 1, timeout=0)  # type: ignore[attr-defined]
+
+    discovered = sorted(chat_ids)
+    if discovered:
+        logger.info("Автоматически обнаружены chat_id: %s", ", ".join(map(str, discovered)))
+    else:
+        logger.warning(
+            "Не удалось автоматически обнаружить chat_id. Отправьте сообщение боту и повторите попытку."
+        )
+    return discovered
+
+
 async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     logger = logging.getLogger(__name__)
     if args.seed is not None:
@@ -329,18 +378,27 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio, args.scenario)
     semaphore = asyncio.Semaphore(args.concurrency)
 
-    chat_ids: Optional[List[int]] = None
+    chat_ids: List[int] = []
     if args.chat_ids:
         try:
-            chat_ids = [int(value.strip()) for value in args.chat_ids.split(",") if value.strip()]
+            chat_ids.extend(
+                int(value.strip()) for value in args.chat_ids.split(",") if value.strip()
+            )
         except ValueError as exc:
             raise ValueError(
                 "Некорректный формат chat-ids. Используйте числа через запятую."
             ) from exc
-        if not chat_ids:
-            raise ValueError("Список chat-ids пуст")
-    elif args.mode == "live":
-        raise ValueError("Для режима live необходимо указать хотя бы один chat-id")
+    if args.mode == "live" and args.auto_discover_chat_ids:
+        discovered = await _auto_discover_chat_ids(application.bot, args.discover_limit, logger)
+        for chat_id in discovered:
+            if chat_id not in chat_ids:
+                chat_ids.append(chat_id)
+    if args.mode == "live" and not chat_ids:
+        raise ValueError(
+            "Для режима live необходимо указать хотя бы один chat-id через --chat-ids "
+            "или включить автообнаружение --auto-discover-chat-ids"
+        )
+    chat_ids = sorted(set(chat_ids))
 
     async def run_for_user(user_id: int) -> None:
         actual_user_id = user_id
@@ -442,6 +500,17 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Список chat_id через запятую для live-режима",
+    )
+    parser.add_argument(
+        "--auto-discover-chat-ids",
+        action="store_true",
+        help="Попытаться автоматически найти chat_id через Bot API (live-режим)",
+    )
+    parser.add_argument(
+        "--discover-limit",
+        type=int,
+        default=20,
+        help="Максимальное число обновлений для автообнаружения chat_id",
     )
     return parser.parse_args()
 
