@@ -1,6 +1,9 @@
 import logging
+from typing import Optional
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
+from telegram.request import BaseRequest
 from src.core.config import settings
 from src.bot.handlers.start import start_handler, handle_email_input
 from src.bot.handlers.common import help_handler, cancel_handler
@@ -18,15 +21,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
-    """Запуск бота."""
-    # Проверяем, что токен установлен
-    if not settings.bot_token:
-        logger.error("BOT_TOKEN не установлен в переменных окружения!")
-        return
+def build_application(
+    bot_token: Optional[str] = None,
+    request: Optional[BaseRequest] = None,
+) -> Application:
+    """Создает и настраивает экземпляр ``Application`` с обработчиками бота."""
 
-    # Создаем Application и передаем ему токен бота.
-    application = Application.builder().token(settings.bot_token).build()
+    token = bot_token or settings.bot_token
+    if not token:
+        raise ValueError("BOT_TOKEN не установлен")
+
+    builder = Application.builder().token(token)
+    if request is not None:
+        builder.request(request)
+
+    application = builder.build()
 
     # ConversationHandler для обратной связи с per_message=True
     feedback_conv_handler = ConversationHandler(
@@ -62,6 +71,17 @@ def main() -> None:
 
     # Обработчик для сообщений с email (ожидаем его после команды /start)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email_input))
+
+    return application
+
+
+def main() -> None:
+    """Запуск бота."""
+    try:
+        application = build_application()
+    except ValueError:
+        logger.error("BOT_TOKEN не установлен в переменных окружения!")
+        return
 
     # Запускаем бота
     logger.info("Бот запускается...")
