@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 try:  # pragma: no cover - optional dependency
@@ -273,6 +274,56 @@ class LLMJudge:
         raise TypeError("LLM client must be callable or expose a 'complete' method.")
 
 
+def create_ollama_client(
+    *,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+    options: Optional[Mapping[str, Any]] = None,
+    timeout: float = 30.0,
+) -> Callable[[str], str]:
+    """Create a callable that sends prompts to a locally running Ollama model.
+
+    The helper is intentionally lightweight so that projects without OpenAI
+    access can still benefit from an LLM layer. By default it connects to
+    ``http://localhost:11434`` which is the standard Ollama endpoint. The
+    model name falls back to the ``LLM_MODEL`` environment variable or
+    ``qwen2.5:0.5b`` when none is provided.
+    """
+
+    import requests  # imported lazily to keep dependency optional in tests
+
+    resolved_base = (base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+    resolved_model = model or os.environ.get("LLM_MODEL") or "qwen2.5:0.5b"
+    payload_options = dict(options or {})
+    endpoint = f"{resolved_base}/api/generate"
+    session = requests.Session()
+
+    def _call(prompt: str, **_: Any) -> str:
+        response = session.post(
+            endpoint,
+            json={
+                "model": resolved_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": payload_options,
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, Mapping):
+            if "response" in data:
+                return str(data["response"])
+            if "output" in data:
+                return str(data["output"])
+            message = data.get("message")
+            if isinstance(message, Mapping):
+                return str(message.get("content", ""))
+        raise ValueError("Unexpected response structure from Ollama API.")
+
+    return _call
+
+
 __all__ = [
     "LLMJudge",
     "EvaluationResult",
@@ -280,4 +331,5 @@ __all__ = [
     "load_rules",
     "run_fallback_checks",
     "parse_llm_response",
+    "create_ollama_client",
 ]

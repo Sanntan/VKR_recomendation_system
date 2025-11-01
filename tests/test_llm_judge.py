@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 from src.testing.llm_judge import (
     LLMJudge,
@@ -6,6 +8,7 @@ from src.testing.llm_judge import (
     load_rules,
     parse_llm_response,
     run_fallback_checks,
+    create_ollama_client,
 )
 
 VALID_RESPONSE = """**Summary**
@@ -82,3 +85,37 @@ def test_run_fallback_checks_passes_for_valid_response():
     failures = run_fallback_checks(VALID_RESPONSE, rules)
 
     assert failures == []
+
+
+def test_create_ollama_client_uses_configured_endpoint(monkeypatch):
+    class DummyResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class DummySession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, json, timeout):
+            self.calls.append({"url": url, "json": json, "timeout": timeout})
+            return DummyResponse({"response": "{\"passed\": true, \"failures\": []}"})
+
+    session = DummySession()
+    dummy_requests = types.SimpleNamespace(Session=lambda: session)
+    monkeypatch.setitem(sys.modules, "requests", dummy_requests)
+
+    client = create_ollama_client(base_url="http://ollama.test:11434", model="phi-mini")
+    reply = client("PROMPT")
+
+    assert reply == '{"passed": true, "failures": []}'
+    assert session.calls
+    call = session.calls[0]
+    assert call["url"] == "http://ollama.test:11434/api/generate"
+    assert call["json"]["model"] == "phi-mini"
+    assert call["timeout"] == 30.0
