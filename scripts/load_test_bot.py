@@ -39,6 +39,9 @@ os.environ.setdefault("BOT_TOKEN", "TEST:TOKEN")
 from src.bot.main import build_application
 
 
+SCENARIOS_REQUIRING_CALLBACKS: Set[str] = {"full", "menu_spam"}
+
+
 class FakeBotAPIRequest(BaseRequest):
     """Заменитель ``BaseRequest``, который не делает HTTP-запросы."""
 
@@ -180,6 +183,223 @@ class LoadTestMetrics:
                     fp.write(f"{idx},{update_type},{latency * 1000:.3f}\n")
 
 
+@dataclass
+class LoadPhase:
+    """Описание отдельной фазы нагрузочного профиля."""
+
+    label: str
+    users: int
+    iterations: int
+    concurrency: int
+    inter_update_delay: float
+    valid_email_ratio: float
+    scenario: Optional[str] = None
+    transport_delay: Optional[float] = None
+
+    def apply(self, base_args: argparse.Namespace) -> argparse.Namespace:
+        """Создаёт копию аргументов с параметрами текущей фазы."""
+
+        phase_args = argparse.Namespace(**vars(base_args))
+        phase_args.users = max(1, int(self.users))
+        phase_args.iterations = max(1, int(self.iterations))
+        phase_args.concurrency = max(1, int(self.concurrency))
+        phase_args.inter_update_delay = max(0.0, float(self.inter_update_delay))
+        phase_args.valid_email_ratio = min(max(float(self.valid_email_ratio), 0.0), 1.0)
+        if self.scenario is not None:
+            phase_args.scenario = self.scenario
+        if self.transport_delay is not None:
+            phase_args.transport_delay = max(0.0, float(self.transport_delay))
+        return phase_args
+
+
+def _clamp_ratio(value: float) -> float:
+    return min(max(float(value), 0.0), 1.0)
+
+
+def _scale_int(value: int, factor: float, minimum: int = 1) -> int:
+    scaled = int(value * factor)
+    return max(minimum, scaled)
+
+
+def _suffix_path(path: Path, label: str) -> Path:
+    safe_label = label.replace(" ", "_")
+    return path.with_name(f"{path.stem}_{safe_label}{path.suffix}")
+
+
+def build_profile_phases(args: argparse.Namespace) -> List[LoadPhase]:
+    """Формирует последовательность фаз для выбранного профиля нагрузки."""
+
+    profile = getattr(args, "profile", "single")
+    base_users = max(1, int(args.users))
+    base_iterations = max(1, int(args.iterations))
+    base_concurrency = max(1, int(args.concurrency))
+    base_delay = max(0.0, float(args.inter_update_delay))
+    base_ratio = _clamp_ratio(args.valid_email_ratio)
+    synthetic_mode = args.mode == "synthetic"
+
+    if profile == "single":
+        return [
+            LoadPhase(
+                label="single",
+                users=base_users,
+                iterations=base_iterations,
+                concurrency=base_concurrency,
+                inter_update_delay=base_delay,
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        ]
+
+    phases: List[LoadPhase] = []
+
+    if profile == "stress":
+        phases.append(
+            LoadPhase(
+                label="warmup",
+                users=_scale_int(base_users, 0.5),
+                iterations=base_iterations,
+                concurrency=_scale_int(base_concurrency, 0.5),
+                inter_update_delay=max(base_delay, 0.05),
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="baseline",
+                users=base_users,
+                iterations=base_iterations,
+                concurrency=base_concurrency,
+                inter_update_delay=base_delay,
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        high_scenario = "menu_spam" if synthetic_mode else "text_storm"
+        phases.append(
+            LoadPhase(
+                label="scale_up",
+                users=_scale_int(base_users, 2.0),
+                iterations=_scale_int(base_iterations, 2.0),
+                concurrency=max(base_concurrency * 3, base_concurrency + 20),
+                inter_update_delay=base_delay / 2 if base_delay else 0.0,
+                valid_email_ratio=max(base_ratio, 0.9),
+                scenario=high_scenario,
+                transport_delay=0.0 if synthetic_mode else None,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="breaking_point",
+                users=_scale_int(base_users, 4.0),
+                iterations=max(_scale_int(base_iterations, 3.0), base_iterations + 5),
+                concurrency=max(base_concurrency * 5, base_concurrency + 80, 50),
+                inter_update_delay=0.0,
+                valid_email_ratio=1.0,
+                scenario=high_scenario,
+                transport_delay=0.0 if synthetic_mode else None,
+            )
+        )
+        return phases
+
+    if profile == "spike":
+        spike_scenario = "menu_spam" if synthetic_mode else "text_storm"
+        phases.append(
+            LoadPhase(
+                label="baseline",
+                users=base_users,
+                iterations=base_iterations,
+                concurrency=base_concurrency,
+                inter_update_delay=base_delay,
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="spike_peak",
+                users=max(_scale_int(base_users, 6.0), base_users + 25),
+                iterations=1,
+                concurrency=max(base_concurrency * 6, base_concurrency + 100),
+                inter_update_delay=0.0,
+                valid_email_ratio=1.0,
+                scenario=spike_scenario,
+                transport_delay=0.0 if synthetic_mode else None,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="recovery",
+                users=base_users,
+                iterations=max(1, base_iterations // 2),
+                concurrency=max(1, base_concurrency // 2),
+                inter_update_delay=max(base_delay, 0.1),
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        return phases
+
+    if profile == "soak":
+        soak_scenario = "menu_spam" if synthetic_mode else "text_storm"
+        phases.append(
+            LoadPhase(
+                label="warmup",
+                users=base_users,
+                iterations=max(1, base_iterations // 2),
+                concurrency=max(1, base_concurrency // 2),
+                inter_update_delay=max(base_delay, 0.05),
+                valid_email_ratio=base_ratio,
+                scenario=args.scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="soak",
+                users=base_users,
+                iterations=max(base_iterations * 10, base_iterations + 20),
+                concurrency=base_concurrency,
+                inter_update_delay=max(base_delay, 0.05),
+                valid_email_ratio=base_ratio,
+                scenario=soak_scenario,
+                transport_delay=args.transport_delay,
+            )
+        )
+        phases.append(
+            LoadPhase(
+                label="chaos",
+                users=base_users,
+                iterations=base_iterations,
+                concurrency=base_concurrency,
+                inter_update_delay=0.0,
+                valid_email_ratio=0.2,
+                scenario=soak_scenario,
+                transport_delay=args.transport_delay if synthetic_mode else None,
+            )
+        )
+        return phases
+
+    # На неизвестный профиль возвращаем одиночную фазу для совместимости
+    return [
+        LoadPhase(
+            label="single",
+            users=base_users,
+            iterations=base_iterations,
+            concurrency=base_concurrency,
+            inter_update_delay=base_delay,
+            valid_email_ratio=base_ratio,
+            scenario=args.scenario,
+            transport_delay=args.transport_delay,
+        )
+    ]
+
+
 class ScenarioFactory:
     """Формирует последовательность ``Update`` для симуляции пользователя."""
 
@@ -264,6 +484,44 @@ class ScenarioFactory:
         if self.scenario == "simple":
             updates.append(self._create_message_update(user_id, "Спасибо"))
             updates.append(self._create_message_update(user_id, "Помощь"))
+            return updates
+
+        if self.scenario == "text_storm":
+            noise_pool = [
+                "Хочу узнать больше",
+                "Расскажи про мероприятия",
+                "Есть ли что-то на выходных?",
+                "Где посмотреть расписание",
+                "Нужна помощь",
+            ]
+            for burst_index in range(10):
+                payload = random.choice(noise_pool)
+                updates.append(
+                    self._create_message_update(
+                        user_id,
+                        f"{payload}! #{burst_index + 1}",
+                    )
+                )
+            updates.append(self._create_message_update(user_id, "Помощь"))
+            return updates
+
+        if self.scenario == "menu_spam":
+            menu_cycle = [
+                ("my_recommendations", "Главное меню"),
+                ("like_1", "Рекомендации"),
+                ("show_other_events", "Рекомендации"),
+                ("back_to_menu", "Рекомендации"),
+                ("event_search", "Главное меню"),
+                ("filter_all", "Поиск мероприятий"),
+                ("search_next", "Результаты поиска"),
+                ("back_to_menu", "Результаты поиска"),
+            ]
+            for _ in range(5):
+                for data, message_text in menu_cycle:
+                    updates.append(self._create_callback_update(user_id, data, message_text))
+            updates.append(self._create_callback_update(user_id, "feedback", "Главное меню"))
+            updates.append(self._create_message_update(user_id, "Бот, ты выдержишь нагрузку?"))
+            updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
             return updates
 
         updates.extend(
@@ -369,12 +627,15 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     await application.initialize()
 
     metrics = LoadTestMetrics()
-    if args.mode == "live" and args.scenario == "full":
+    if args.mode == "live" and args.scenario in SCENARIOS_REQUIRING_CALLBACKS:
+        fallback_scenario = "text_storm"
         logger.warning(
-            "Сценарий 'full' содержит callback-запросы, которые невалидны для live-режима. "
-            "Переключаемся на 'simple'."
+            "Сценарий '%s' содержит callback-запросы, которые невалидны для live-режима. "
+            "Переключаемся на '%s'.",
+            args.scenario,
+            fallback_scenario,
         )
-        args.scenario = "simple"
+        args.scenario = fallback_scenario
     scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio, args.scenario)
     semaphore = asyncio.Semaphore(args.concurrency)
 
@@ -491,9 +752,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--scenario",
-        choices=["full", "simple"],
+        choices=["full", "simple", "text_storm", "menu_spam"],
         default="full",
         help="Тип пользовательского сценария",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=["single", "stress", "spike", "soak"],
+        default="single",
+        help="Преднастроенный профиль нагрузки (single, stress, spike, soak)",
     )
     parser.add_argument(
         "--chat-ids",
@@ -519,8 +786,75 @@ def main() -> None:
     args = parse_args()
     configure_logging(args.log_file, args.log_level)
 
-    metrics = asyncio.run(run_load_test(args))
-    metrics.dump(args.metrics_file, args.raw_metrics_file)
+    phases = build_profile_phases(args)
+    multi_phase = len(phases) > 1
+    logger = logging.getLogger(__name__)
+    aggregated: List[Dict[str, Any]] = []
+
+    for phase in phases:
+        requested_scenario = phase.scenario if phase.scenario is not None else args.scenario
+        phase_args = phase.apply(args)
+        logger.info(
+            "=== Фаза профиля %s ===",
+            phase.label,
+        )
+        logger.info(
+            "Параметры фазы: mode=%s users=%s iterations=%s concurrency=%s scenario=%s inter_update_delay=%.3f valid_email_ratio=%.2f",
+            phase_args.mode,
+            phase_args.users,
+            phase_args.iterations,
+            phase_args.concurrency,
+            phase_args.scenario,
+            phase_args.inter_update_delay,
+            phase_args.valid_email_ratio,
+        )
+        metrics = asyncio.run(run_load_test(phase_args))
+        summary = metrics.summary()
+
+        phase_metrics_path = (
+            _suffix_path(args.metrics_file, phase.label) if multi_phase else args.metrics_file
+        )
+        phase_raw_path = None
+        if args.raw_metrics_file:
+            phase_raw_path = (
+                _suffix_path(args.raw_metrics_file, phase.label)
+                if multi_phase
+                else args.raw_metrics_file
+            )
+        metrics.dump(phase_metrics_path, phase_raw_path)
+
+        aggregated.append(
+            {
+                "label": phase.label,
+                "mode": phase_args.mode,
+                "users": phase_args.users,
+                "iterations": phase_args.iterations,
+                "concurrency": phase_args.concurrency,
+                "inter_update_delay": phase_args.inter_update_delay,
+                "valid_email_ratio": phase_args.valid_email_ratio,
+                "scenario": phase_args.scenario,
+                "requested_scenario": requested_scenario,
+                "transport_delay": getattr(phase_args, "transport_delay", None),
+                "summary": summary,
+                "metrics_file": str(phase_metrics_path),
+                "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
+            }
+        )
+
+    if multi_phase:
+        aggregate_path = args.metrics_file
+        aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+        with aggregate_path.open("w", encoding="utf-8") as fp:
+            json.dump(
+                {
+                    "profile": args.profile,
+                    "phases": aggregated,
+                },
+                fp,
+                ensure_ascii=False,
+                indent=2,
+            )
+
 
 
 if __name__ == "__main__":
