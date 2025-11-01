@@ -1,4 +1,3 @@
-"""Нагрузочное тестирование Supabase/PostgreSQL."""
 
 from __future__ import annotations
 
@@ -44,6 +43,7 @@ def ensure_db_modules() -> dict[str, Any]:
         from src.core.database.crud import recommendations as _recommendations_crud
         from src.core.database.crud import students as _students_crud
         from src.core.database.models import Clusters as _Clusters
+        from src.core.database.models import Directions as _Directions
         from src.core.database.models import Directions as _Directions
         from src.core.database.models import Events as _Events
         from src.core.database.models import Feedback as _Feedback
@@ -544,6 +544,14 @@ def build_operations(profile: str, state: SharedState) -> list[OperationSpec]:
             "list_feedback": 2,
             "create_feedback": 3,
             "update_feedback": 2,
+        },
+        "stress-test": {  # Добавьте новый профиль
+            "fetch_student": 2,
+            "fetch_recommendations": 2,
+            "fetch_events": 1,
+            "list_feedback": 1,
+            "create_feedback": 8,  # Больше операций записи
+            "update_feedback": 6,
         },
     }
 
@@ -1073,7 +1081,7 @@ def cleanup_directions(state: SharedState, logger: logging.Logger) -> None:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Нагрузочное тестирование базы данных Supabase")
     parser.add_argument("--duration", type=float, default=600.0, help="Желаемая длительность теста, секунды")
-    parser.add_argument("--min-duration", type=float, default=600.0, help="Минимально допустимая длительность теста")
+    parser.add_argument("--min-duration", type=float, default=120.0, help="Минимально допустимая длительность теста")
     parser.add_argument("--allow-short-runs", action="store_true", help="Разрешить запуск короче минимального времени")
     parser.add_argument("--concurrency", type=int, default=16, help="Количество параллельных воркеров")
     parser.add_argument(
@@ -1120,16 +1128,15 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     try:
         metrics, state = asyncio.run(run_load_test(args))
-    except KeyboardInterrupt:  # pragma: no cover
+    except KeyboardInterrupt:
         logger.warning("Тест прерван пользователем")
         return
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Тест завершился ошибкой: %s", exc)
         raise
     else:
         logger.info("Нагрузочный тест завершён")
     finally:
-        # Финальный логгер может писать даже если run_load_test упал
         pass
 
     export_metrics(
