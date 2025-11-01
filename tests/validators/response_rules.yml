@@ -1,0 +1,31 @@
+{
+  "prompt_preamble": "You are an automated reviewer verifying that an assistant response follows the required structure for project status updates. Judge only on the listed rules and avoid making assumptions that are not grounded in the rules.",
+  "response_format": "{\n    \"passed\": bool,  # overall decision\n    \"failures\": [    # leave empty when the response satisfies every rule\n      {\n        \"rule_id\": str,\n        \"reason\": str\n      }\n    ]\n  }",
+  "rules": [
+    {
+      "id": "summary-header",
+      "description": "The response must contain the '**Summary**' heading on its own line.",
+      "guidance": "Look for a line that exactly matches \"**Summary**\" (case sensitive). The heading must precede the list of summary bullet points."
+    },
+    {
+      "id": "summary-bullets",
+      "description": "Every entry inside the Summary section must be a bullet list item.",
+      "guidance": "After the summary heading, there must be at least one line that starts with \"* \" (asterisk followed by a space). Bullet items should immediately follow the heading before the next blank line or section."
+    },
+    {
+      "id": "testing-header",
+      "description": "The response must contain the '**Testing**' heading on its own line.",
+      "guidance": "Verify that there is a line equal to \"**Testing**\". The section documents how the solution was validated."
+    },
+    {
+      "id": "testing-emoji-bullets",
+      "description": "Each Testing item must be a bullet prefixed with an emoji status.",
+      "guidance": "Bullet lines in the Testing section must start with \"* \" followed by one of the emojis ✅, ⚠️, or ❌ before the command. Example: \"* ✅ `pytest -q`\"."
+    },
+    {
+      "id": "testing-command-format",
+      "description": "Testing bullet entries should document the executed command in backticks.",
+      "guidance": "Prefer commands formatted inside backticks after the emoji. For example, \"* ✅ `pytest -q`\"."
+    }
+  ]
+}
