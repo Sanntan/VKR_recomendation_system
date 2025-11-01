@@ -19,7 +19,7 @@ import signal
 import statistics
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.request import BaseRequest, RequestData
 from telegram.error import NetworkError, RetryAfter, TimedOut
+from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -150,28 +151,66 @@ class LiveRateLimiter:
                 self._per_chat_last[chat_id] = now
 
 @dataclass
+class UpdateRecord:
+    update_type: str
+    latency: float
+    started_at: float
+    finished_at: float
+    attempts: int
+    error: Optional[str]
+
+
+@dataclass
 class LoadTestMetrics:
-    """Сбор метрик по длительности и ошибкам."""
+    """Сбор метрик по длительности, ретраям и ошибкам."""
 
     latencies: List[float] = field(default_factory=list)
     per_type_latencies: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
-    latency_records: List[Tuple[str, float]] = field(default_factory=list)
+    detailed_records: List[UpdateRecord] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     total_updates: int = 0
     start_ts: float = field(default_factory=time.perf_counter)
     end_ts: float = 0.0
 
-    def record(self, update: Update, duration: float, exc: Optional[BaseException] = None) -> None:
+    def record(
+        self,
+        update: Update,
+        duration: float,
+        exc: Optional[BaseException] = None,
+        started_at: Optional[float] = None,
+        attempts: int = 1,
+        finished_at: Optional[float] = None,
+    ) -> None:
         global CURRENT_METRICS
+        now = time.perf_counter()
+        if started_at is None:
+            started_at = now - duration
+        if finished_at is None:
+            finished_at = started_at + duration
+
         self.total_updates += 1
         self.latencies.append(duration)
         update_type = "callback" if update.callback_query else "message" if update.message else "other"
         self.per_type_latencies[update_type].append(duration)
-        self.latency_records.append((update_type, duration))
 
+        error_text = None
         if exc is not None:
-            self.errors.append(f"{type(exc).__name__}: {exc}")
+            error_text = f"{type(exc).__name__}: {exc}"
+            self.errors.append(error_text)
 
+        self.detailed_records.append(
+            UpdateRecord(
+                update_type=update_type,
+                latency=duration,
+                started_at=started_at,
+                finished_at=finished_at,
+                attempts=attempts,
+                error=error_text,
+            )
+        )
+
+        self.start_ts = min(self.start_ts, started_at)
+        self.end_ts = max(self.end_ts, finished_at)
         CURRENT_METRICS = self
 
     def finish(self) -> None:
@@ -202,6 +241,39 @@ class LoadTestMetrics:
         percentiles = statistics.quantiles(data, n=100, method="inclusive")
         return {"avg": avg, "median": median, "p95": percentiles[94], "p99": percentiles[98]}
 
+    def _histogram(self, bins: int = 10) -> List[Dict[str, float]]:
+        if not self.latencies:
+            return []
+        minimum = min(self.latencies)
+        maximum = max(self.latencies)
+        if maximum == minimum:
+            return [
+                {
+                    "lower_ms": minimum * 1000.0,
+                    "upper_ms": maximum * 1000.0,
+                    "count": len(self.latencies),
+                }
+            ]
+        step = (maximum - minimum) / bins
+        buckets = [0 for _ in range(bins)]
+        for value in self.latencies:
+            index = int((value - minimum) / step)
+            if index >= bins:
+                index = bins - 1
+            buckets[index] += 1
+        histogram: List[Dict[str, float]] = []
+        for idx, count in enumerate(buckets):
+            lower = minimum + step * idx
+            upper = minimum + step * (idx + 1)
+            histogram.append({"lower_ms": lower * 1000.0, "upper_ms": upper * 1000.0, "count": count})
+        return histogram
+
+    def _attempt_stats(self) -> Dict[str, float]:
+        if not self.detailed_records:
+            return {"avg": 0.0, "max": 0.0}
+        attempts = [record.attempts for record in self.detailed_records]
+        return {"avg": statistics.mean(attempts), "max": max(attempts)}
+
     def summary(self) -> Dict[str, Any]:
         throughput = self.total_updates / self.duration if self.duration > 0 else 0.0
         return {
@@ -214,19 +286,68 @@ class LoadTestMetrics:
                 key: self._quantiles(values) for key, values in self.per_type_latencies.items()
             },
             "error_messages": self.errors,
+            "attempts": self._attempt_stats(),
         }
 
-    def dump(self, metrics_path: Path, raw_metrics_path: Optional[Path] = None) -> None:
+    def dump(
+        self,
+        metrics_path: Path,
+        raw_metrics_path: Optional[Path] = None,
+    ) -> Dict[str, Optional[str]]:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = self.summary()
         with metrics_path.open("w", encoding="utf-8") as fp:
-            json.dump(self.summary(), fp, ensure_ascii=False, indent=2)
+            json.dump(summary, fp, ensure_ascii=False, indent=2)
+
+        artifacts: Dict[str, Optional[str]] = {"summary": str(metrics_path)}
 
         if raw_metrics_path:
             raw_metrics_path.parent.mkdir(parents=True, exist_ok=True)
             with raw_metrics_path.open("w", encoding="utf-8") as fp:
                 fp.write("update_index,type,latency_ms\n")
-                for idx, (update_type, latency) in enumerate(self.latency_records, start=1):
-                    fp.write(f"{idx},{update_type},{latency * 1000:.3f}\n")
+                for idx, record in enumerate(self.detailed_records, start=1):
+                    fp.write(f"{idx},{record.update_type},{record.latency * 1000:.3f}\n")
+            artifacts["raw_csv"] = str(raw_metrics_path)
+        else:
+            artifacts["raw_csv"] = None
+
+        histogram_path = metrics_path.with_name(f"{metrics_path.stem}_histogram.json")
+        with histogram_path.open("w", encoding="utf-8") as fp:
+            json.dump({"buckets": self._histogram()}, fp, ensure_ascii=False, indent=2)
+        artifacts["histogram"] = str(histogram_path)
+
+        per_type_path = metrics_path.with_name(f"{metrics_path.stem}_per_type.json")
+        with per_type_path.open("w", encoding="utf-8") as fp:
+            json.dump(
+                {
+                    "counts": {key: len(values) for key, values in self.per_type_latencies.items()},
+                    "latency": summary["latency_by_type"],
+                },
+                fp,
+                ensure_ascii=False,
+                indent=2,
+            )
+        artifacts["per_type"] = str(per_type_path)
+
+        errors_path = metrics_path.with_name(f"{metrics_path.stem}_errors.json")
+        error_counter = Counter(error for error in self.errors)
+        with errors_path.open("w", encoding="utf-8") as fp:
+            json.dump({"errors": dict(error_counter)}, fp, ensure_ascii=False, indent=2)
+        artifacts["errors"] = str(errors_path)
+
+        timeline_path = metrics_path.with_name(f"{metrics_path.stem}_timeline.csv")
+        with timeline_path.open("w", encoding="utf-8") as fp:
+            fp.write("update_index,type,start_offset_s,finish_offset_s,latency_ms,attempts,error\n")
+            for idx, record in enumerate(self.detailed_records, start=1):
+                start_offset = max(record.started_at - self.start_ts, 0.0)
+                finish_offset = max(record.finished_at - self.start_ts, 0.0)
+                error_text = record.error or ""
+                fp.write(
+                    f"{idx},{record.update_type},{start_offset:.6f},{finish_offset:.6f},{record.latency * 1000:.3f},{record.attempts},{error_text}\n"
+                )
+        artifacts["timeline"] = str(timeline_path)
+
+        return artifacts
 
 
 @dataclass
@@ -255,6 +376,8 @@ class LoadPhase:
             phase_args.scenario = self.scenario
         if self.transport_delay is not None:
             phase_args.transport_delay = max(0.0, float(self.transport_delay))
+        phase_args.min_duration = float(getattr(base_args, "min_duration", 0.0))
+        phase_args.allow_short_runs = getattr(base_args, "allow_short_runs", False)
         return phase_args
 
 
@@ -454,12 +577,15 @@ class ScenarioFactory:
         bot,  # type: ignore[no-untyped-def]
         valid_email_ratio: float,
         scenario: str = "full",
+        allow_callbacks: bool = True,
     ) -> None:
         self.bot = bot
         self.valid_email_ratio = valid_email_ratio
         self._update_ids = count(start=1)
         self._message_ids = count(start=10_000)
         self.scenario = scenario
+        self.allow_callbacks = allow_callbacks
+        self._feedback_template = "Обратная связь: бот выдержал навигацию пользователя {user_id}."
 
     def _base_user(self, user_id: int) -> Dict[str, Any]:
         return {
@@ -512,6 +638,38 @@ class ScenarioFactory:
         }
         return Update.de_json(update_data, self.bot)
 
+    def _navigation_sequence(self, user_id: int) -> List[Update]:
+        feedback_text = self._feedback_template.format(user_id=user_id)
+        if self.allow_callbacks:
+            callbacks = [
+                ("my_recommendations", "Главное меню"),
+                ("like_1", "Рекомендации"),
+                ("show_other_events", "Рекомендации"),
+                ("back_to_menu", "Рекомендации"),
+                ("event_search", "Главное меню"),
+                ("filter_all", "Поиск мероприятий"),
+                ("search_next", "Результаты поиска"),
+                ("back_to_menu", "Результаты поиска"),
+                ("feedback", "Главное меню"),
+            ]
+            updates = [self._create_callback_update(user_id, data, text) for data, text in callbacks]
+            updates.append(self._create_message_update(user_id, feedback_text))
+            updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
+            return updates
+
+        return [
+            self._create_message_update(user_id, "/menu"),
+            self._create_message_update(user_id, "Открыть рекомендации"),
+            self._create_message_update(user_id, "Показать другие рекомендации"),
+            self._create_message_update(user_id, "Вернуться в главное меню"),
+            self._create_message_update(user_id, "Перейти к поиску мероприятий"),
+            self._create_message_update(user_id, "Показать следующее мероприятие"),
+            self._create_message_update(user_id, "Вернуться в главное меню"),
+            self._create_message_update(user_id, "Открыть обратную связь"),
+            self._create_message_update(user_id, feedback_text),
+            self._create_message_update(user_id, "Возврат в главное меню"),
+        ]
+
     def build_flow(self, user_id: int) -> List[Update]:
         updates: List[Update] = []
         updates.append(self._create_message_update(user_id, "/start", is_command=True))
@@ -524,8 +682,10 @@ class ScenarioFactory:
         if not valid:
             return updates
 
+        navigation_updates = self._navigation_sequence(user_id)
+
         if self.scenario == "simple":
-            updates.append(self._create_message_update(user_id, "Спасибо"))
+            updates.extend(navigation_updates)
             updates.append(self._create_message_update(user_id, "Помощь"))
             return updates
 
@@ -545,10 +705,12 @@ class ScenarioFactory:
                         f"{payload}! #{burst_index + 1}",
                     )
                 )
+            updates.extend(navigation_updates)
             updates.append(self._create_message_update(user_id, "Помощь"))
             return updates
 
         if self.scenario == "menu_spam":
+            updates.extend(navigation_updates)
             menu_cycle = [
                 ("my_recommendations", "Главное меню"),
                 ("like_1", "Рекомендации"),
@@ -568,33 +730,34 @@ class ScenarioFactory:
             return updates
 
         if self.scenario == "feedback_loop":
-            updates.append(self._create_callback_update(user_id, "feedback", "Главное меню"))
-            for idx in range(5):
-                updates.append(
-                    self._create_message_update(
-                        user_id,
-                        f"stud0000286472@study.utmn.ru подтверждаю участие #{idx + 1}",
+            updates.extend(navigation_updates)
+            loop_count = 5
+            for idx in range(loop_count):
+                if self.allow_callbacks:
+                    updates.append(self._create_callback_update(user_id, "feedback", "Главное меню"))
+                    updates.append(
+                        self._create_message_update(
+                            user_id,
+                            f"Обратная связь #{idx + 1}: stud0000286472@study.utmn.ru подтверждаю участие",
+                        )
                     )
-                )
-            updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
+                    updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
+                else:
+                    updates.append(self._create_message_update(user_id, "Открыть обратную связь"))
+                    updates.append(
+                        self._create_message_update(
+                            user_id,
+                            f"Обратная связь #{idx + 1}: stud0000286472@study.utmn.ru подтверждаю участие",
+                        )
+                    )
+                    updates.append(self._create_message_update(user_id, "Возврат в главное меню"))
             updates.append(self._create_message_update(user_id, "Помощь"))
             return updates
 
-        updates.extend(
-            [
-                self._create_callback_update(user_id, "my_recommendations", "Главное меню"),
-                self._create_callback_update(user_id, "like_1", "Рекомендации"),
-                self._create_callback_update(user_id, "show_other_events", "Рекомендации"),
-                self._create_callback_update(user_id, "back_to_menu", "Рекомендации"),
-                self._create_callback_update(user_id, "event_search", "Главное меню"),
-                self._create_callback_update(user_id, "filter_all", "Поиск мероприятий"),
-                self._create_callback_update(user_id, "search_next", "Результаты поиска"),
-                self._create_callback_update(user_id, "back_to_menu", "Результаты поиска"),
-                self._create_callback_update(user_id, "feedback", "Главное меню"),
-                self._create_message_update(user_id, "Отличный бот!"),
-                self._create_callback_update(user_id, "back_to_menu", "Обратная связь"),
-            ]
-        )
+        updates.extend(navigation_updates)
+        updates.append(self._create_message_update(user_id, "Отличный бот!"))
+        if self.allow_callbacks:
+            updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
         return updates
 
 
@@ -624,6 +787,7 @@ async def process_update(
             await asyncio.sleep(delay)
         attempts = 0
         total_duration = 0.0
+        overall_start = time.perf_counter()
         logger = logging.getLogger(__name__)
         while True:
             chat_id = _extract_chat_id(update)
@@ -633,21 +797,38 @@ async def process_update(
             start = time.perf_counter()
             try:
                 await application.process_update(update)
-                total_duration += time.perf_counter() - start
+                attempt_end = time.perf_counter()
+                total_duration += attempt_end - start
             except RetryAfter as exc:  # pragma: no cover - зависит от внешнего API
-                total_duration += time.perf_counter() - start
+                attempt_end = time.perf_counter()
+                total_duration += attempt_end - start
                 attempts += 1
                 logger.warning("Получен RetryAfter на %.2f c для chat_id=%s", exc.retry_after, chat_id)
                 if attempts >= max_retries:
-                    metrics.record(update, total_duration, exc)
+                    metrics.record(
+                        update,
+                        total_duration,
+                        exc,
+                        started_at=overall_start,
+                        attempts=attempts,
+                        finished_at=attempt_end,
+                    )
                     break
                 await asyncio.sleep(exc.retry_after)
                 continue
             except (TimedOut, NetworkError) as exc:  # pragma: no cover - зависит от сети
-                total_duration += time.perf_counter() - start
+                attempt_end = time.perf_counter()
+                total_duration += attempt_end - start
                 attempts += 1
                 if attempts >= max_retries:
-                    metrics.record(update, total_duration, exc)
+                    metrics.record(
+                        update,
+                        total_duration,
+                        exc,
+                        started_at=overall_start,
+                        attempts=attempts,
+                        finished_at=attempt_end,
+                    )
                     logger.warning("Достигнут предел повторов после ошибки %s", type(exc).__name__)
                     break
                 backoff = min(0.5 * (2 ** (attempts - 1)), 5.0)
@@ -661,12 +842,27 @@ async def process_update(
                 await asyncio.sleep(backoff)
                 continue
             except Exception as exc:  # pragma: no cover - логирование ошибок
-                total_duration += time.perf_counter() - start
-                metrics.record(update, total_duration, exc)
+                attempt_end = time.perf_counter()
+                total_duration += attempt_end - start
+                metrics.record(
+                    update,
+                    total_duration,
+                    exc,
+                    started_at=overall_start,
+                    attempts=max(attempts + 1, 1),
+                    finished_at=attempt_end,
+                )
                 logger.exception("Ошибка обработки обновления")
                 break
             else:
-                metrics.record(update, total_duration)
+                attempt_end = time.perf_counter()
+                metrics.record(
+                    update,
+                    total_duration,
+                    started_at=overall_start,
+                    attempts=attempts + 1,
+                    finished_at=attempt_end,
+                )
                 break
 
 
@@ -745,7 +941,12 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
             fallback_scenario,
         )
         args.scenario = fallback_scenario
-    scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio, args.scenario)
+    scenario_factory = ScenarioFactory(
+        application.bot,
+        args.valid_email_ratio,
+        args.scenario,
+        allow_callbacks=args.mode != "live",
+    )
     semaphore = asyncio.Semaphore(args.concurrency)
     rate_limiter: Optional[LiveRateLimiter] = None
     if args.mode == "live":
@@ -784,6 +985,15 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
         pass
 
     min_duration = max(0.0, float(getattr(args, "min_duration", 0.0)))
+    enforce_floor = 600.0
+    if not getattr(args, "allow_short_runs", False) and min_duration < enforce_floor:
+        logger.info(
+            "Минимальная длительность %.0f с будет применена вместо запрошенных %.2f с",
+            enforce_floor,
+            min_duration,
+        )
+        min_duration = enforce_floor
+    args.min_duration = min_duration
 
     async def duration_guard() -> None:
         if min_duration <= 0:
@@ -851,15 +1061,201 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
 
 
 def configure_logging(log_path: Path, log_level: str) -> None:
+    root_logger = logging.getLogger()
+    while root_logger.handlers:
+        handler = root_logger.handlers.pop()
+        try:
+            handler.close()
+        except Exception:  # pragma: no cover - защитное закрытие
+            pass
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    stream_handler = logging.StreamHandler()
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        handlers=[
-            logging.FileHandler(log_path, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=[file_handler, stream_handler],
     )
+
+
+def execute_profile(args: argparse.Namespace) -> Dict[str, Any]:
+    phases = build_profile_phases(args)
+    multi_phase = len(phases) > 1
+    logger = logging.getLogger(__name__)
+    global CURRENT_METRICS
+    aggregated: List[Dict[str, Any]] = []
+    interrupted = False
+
+    for phase in phases:
+        requested_scenario = phase.scenario if phase.scenario is not None else args.scenario
+        phase_args = phase.apply(args)
+        logger.info("=== Фаза профиля %s ===", phase.label)
+        logger.info(
+            "Параметры фазы: mode=%s users=%s iterations=%s concurrency=%s scenario=%s inter_update_delay=%.3f valid_email_ratio=%.2f",
+            phase_args.mode,
+            phase_args.users,
+            phase_args.iterations,
+            phase_args.concurrency,
+            phase_args.scenario,
+            phase_args.inter_update_delay,
+            phase_args.valid_email_ratio,
+        )
+
+        phase_metrics_path = (
+            _suffix_path(args.metrics_file, phase.label) if multi_phase else args.metrics_file
+        )
+        phase_raw_path = None
+        if args.raw_metrics_file:
+            phase_raw_path = (
+                _suffix_path(args.raw_metrics_file, phase.label)
+                if multi_phase
+                else args.raw_metrics_file
+            )
+
+        try:
+            metrics = asyncio.run(run_load_test(phase_args))
+        except KeyboardInterrupt:
+            logger.warning("Фаза %s прервана пользователем", phase.label)
+            metrics = CURRENT_METRICS or LoadTestMetrics()
+            metrics.finish()
+            summary = metrics.summary()
+            artifacts = metrics.dump(phase_metrics_path, phase_raw_path)
+            aggregated.append(
+                {
+                    "label": phase.label,
+                    "mode": phase_args.mode,
+                    "users": phase_args.users,
+                    "iterations": phase_args.iterations,
+                    "concurrency": phase_args.concurrency,
+                    "inter_update_delay": phase_args.inter_update_delay,
+                    "valid_email_ratio": phase_args.valid_email_ratio,
+                    "scenario": phase_args.scenario,
+                    "requested_scenario": requested_scenario,
+                    "transport_delay": getattr(phase_args, "transport_delay", None),
+                    "min_duration_sec": getattr(phase_args, "min_duration", 0.0),
+                    "allow_short_runs": getattr(phase_args, "allow_short_runs", False),
+                    "summary": summary,
+                    "artifacts": artifacts,
+                }
+            )
+            CURRENT_METRICS = None
+            interrupted = True
+            break
+        else:
+            summary = metrics.summary()
+            artifacts = metrics.dump(phase_metrics_path, phase_raw_path)
+            aggregated.append(
+                {
+                    "label": phase.label,
+                    "mode": phase_args.mode,
+                    "users": phase_args.users,
+                    "iterations": phase_args.iterations,
+                    "concurrency": phase_args.concurrency,
+                    "inter_update_delay": phase_args.inter_update_delay,
+                    "valid_email_ratio": phase_args.valid_email_ratio,
+                    "scenario": phase_args.scenario,
+                    "requested_scenario": requested_scenario,
+                    "transport_delay": getattr(phase_args, "transport_delay", None),
+                    "min_duration_sec": getattr(phase_args, "min_duration", 0.0),
+                    "allow_short_runs": getattr(phase_args, "allow_short_runs", False),
+                    "summary": summary,
+                    "artifacts": artifacts,
+                }
+            )
+            CURRENT_METRICS = None
+
+    if multi_phase:
+        aggregate_path = args.metrics_file
+        aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+        with aggregate_path.open("w", encoding="utf-8") as fp:
+            json.dump(
+                {
+                    "profile": args.profile,
+                    "phases": aggregated,
+                },
+                fp,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    return {
+        "profile": args.profile,
+        "multi_phase": multi_phase,
+        "phases": aggregated,
+        "aggregate_file": str(args.metrics_file) if multi_phase else None,
+        "log_file": str(args.log_file),
+        "interrupted": interrupted,
+    }
+
+
+def run_suite(args: argparse.Namespace) -> Dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    if args.suite == "stress_all":
+        combos = [
+            ("synthetic", "full"),
+            ("synthetic", "menu_spam"),
+            ("synthetic", "feedback_loop"),
+            ("synthetic", "text_storm"),
+            ("live", "simple"),
+            ("live", "text_storm"),
+        ]
+    else:
+        combos = []
+
+    results: List[Dict[str, Any]] = []
+    started_at = datetime.utcnow().isoformat() + "Z"
+    base_metrics_file: Path = args.metrics_file
+    base_log_file: Path = args.log_file
+    base_raw_file = args.raw_metrics_file
+
+    for mode, scenario in combos:
+        label = f"{mode}_{scenario}"
+        run_args = argparse.Namespace(**vars(args))
+        run_args.mode = mode
+        run_args.scenario = scenario
+        run_args.profile = "stress"
+        run_args.suite = "none"
+        run_args.log_file = _suffix_path(base_log_file, label)
+        run_args.metrics_file = _suffix_path(base_metrics_file, label)
+        if base_raw_file:
+            run_args.raw_metrics_file = _suffix_path(base_raw_file, label)
+        else:
+            run_args.raw_metrics_file = None
+        configured_min = float(args.min_duration)
+        if not args.allow_short_runs:
+            configured_min = max(configured_min, 600.0)
+        run_args.min_duration = configured_min
+
+        configure_logging(run_args.log_file, args.log_level)
+        logger.info("Запуск набора: режим %s, сценарий %s", mode, scenario)
+        profile_result = execute_profile(run_args)
+        results.append(
+            {
+                "label": label,
+                "mode": mode,
+                "scenario": scenario,
+                "log_file": str(run_args.log_file),
+                "metrics": profile_result,
+            }
+        )
+        configure_logging(base_log_file, args.log_level)
+        if profile_result.get("interrupted"):
+            logger.warning("Набор %s остановлен на этапе %s по запросу пользователя", args.suite, label)
+            break
+
+    summary_path = base_metrics_file
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    suite_summary = {
+        "suite": args.suite,
+        "started_at": started_at,
+        "runs": results,
+        "summary_file": str(summary_path),
+    }
+    with summary_path.open("w", encoding="utf-8") as fp:
+        json.dump(suite_summary, fp, ensure_ascii=False, indent=2)
+    logger.info("Набор %s завершён, агрегированный отчёт: %s", args.suite, summary_path)
+    return suite_summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -926,6 +1322,12 @@ def parse_args() -> argparse.Namespace:
         help="Преднастроенный профиль нагрузки (single, stress, spike, soak)",
     )
     parser.add_argument(
+        "--suite",
+        choices=["none", "stress_all"],
+        default="none",
+        help="Запустить преднастроенный набор прогонов",
+    )
+    parser.add_argument(
         "--chat-ids",
         type=str,
         default=None,
@@ -945,7 +1347,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-duration",
         type=float,
-        default=300.0,
+        default=600.0,
         help="Минимальная длительность теста в секундах до автоматического завершения",
     )
     parser.add_argument(
@@ -966,6 +1368,11 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Лимит запросов в секунду на один чат для live-режима (0 — без ограничения)",
     )
+    parser.add_argument(
+        "--allow-short-runs",
+        action="store_true",
+        help="Разрешить длительность короче 600 секунд (режим отладки)",
+    )
     return parser.parse_args()
 
 
@@ -973,104 +1380,11 @@ def main() -> None:
     args = parse_args()
     configure_logging(args.log_file, args.log_level)
 
-    phases = build_profile_phases(args)
-    multi_phase = len(phases) > 1
-    logger = logging.getLogger(__name__)
-    global CURRENT_METRICS
-    aggregated: List[Dict[str, Any]] = []
-    phase_metrics_path: Optional[Path]
-    phase_raw_path: Optional[Path]
+    if args.suite != "none":
+        run_suite(args)
+        return
 
-    for phase in phases:
-        requested_scenario = phase.scenario if phase.scenario is not None else args.scenario
-        phase_args = phase.apply(args)
-        logger.info("=== Фаза профиля %s ===", phase.label)
-        logger.info(
-            "Параметры фазы: mode=%s users=%s iterations=%s concurrency=%s scenario=%s inter_update_delay=%.3f valid_email_ratio=%.2f",
-            phase_args.mode,
-            phase_args.users,
-            phase_args.iterations,
-            phase_args.concurrency,
-            phase_args.scenario,
-            phase_args.inter_update_delay,
-            phase_args.valid_email_ratio,
-        )
-
-        phase_metrics_path = (
-            _suffix_path(args.metrics_file, phase.label) if multi_phase else args.metrics_file
-        )
-        phase_raw_path = None
-        if args.raw_metrics_file:
-            phase_raw_path = (
-                _suffix_path(args.raw_metrics_file, phase.label)
-                if multi_phase
-                else args.raw_metrics_file
-            )
-
-        try:
-            metrics = asyncio.run(run_load_test(phase_args))
-        except KeyboardInterrupt:
-            logger.warning("Фаза %s прервана пользователем", phase.label)
-            metrics = CURRENT_METRICS or LoadTestMetrics()
-            metrics.finish()
-            summary = metrics.summary()
-            metrics.dump(phase_metrics_path, phase_raw_path)
-            aggregated.append(
-                {
-                    "label": phase.label,
-                    "mode": phase_args.mode,
-                    "users": phase_args.users,
-                    "iterations": phase_args.iterations,
-                    "concurrency": phase_args.concurrency,
-                    "inter_update_delay": phase_args.inter_update_delay,
-                    "valid_email_ratio": phase_args.valid_email_ratio,
-                    "scenario": phase_args.scenario,
-                    "requested_scenario": requested_scenario,
-                    "transport_delay": getattr(phase_args, "transport_delay", None),
-                    "summary": summary,
-                    "metrics_file": str(phase_metrics_path),
-                    "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
-                }
-            )
-            CURRENT_METRICS = None
-            break
-        else:
-            summary = metrics.summary()
-            metrics.dump(phase_metrics_path, phase_raw_path)
-
-            aggregated.append(
-                {
-                    "label": phase.label,
-                    "mode": phase_args.mode,
-                    "users": phase_args.users,
-                    "iterations": phase_args.iterations,
-                    "concurrency": phase_args.concurrency,
-                    "inter_update_delay": phase_args.inter_update_delay,
-                    "valid_email_ratio": phase_args.valid_email_ratio,
-                    "scenario": phase_args.scenario,
-                    "requested_scenario": requested_scenario,
-                    "transport_delay": getattr(phase_args, "transport_delay", None),
-                    "summary": summary,
-                    "metrics_file": str(phase_metrics_path),
-                    "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
-                }
-            )
-            CURRENT_METRICS = None
-
-    if multi_phase:
-        aggregate_path = args.metrics_file
-        aggregate_path.parent.mkdir(parents=True, exist_ok=True)
-        with aggregate_path.open("w", encoding="utf-8") as fp:
-            json.dump(
-                {
-                    "profile": args.profile,
-                    "phases": aggregated,
-                },
-                fp,
-                ensure_ascii=False,
-                indent=2,
-            )
-
+    execute_profile(args)
 
 
 if __name__ == "__main__":
