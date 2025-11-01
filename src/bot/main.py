@@ -21,6 +21,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _log_error(update: object, context) -> None:  # type: ignore[no-untyped-def]
+    """Стандартный обработчик ошибок Telegram Application."""
+    logger.error("Ошибка при обработке обновления %s: %s", update, context.error)
+
+
 def build_application(
     bot_token: Optional[str] = None,
     request: Optional[BaseRequest] = None,
@@ -71,6 +76,8 @@ def build_application(
 
     # Обработчик для сообщений с email (ожидаем его после команды /start)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email_input))
+
+    application.add_error_handler(_log_error)
 
     return application
 

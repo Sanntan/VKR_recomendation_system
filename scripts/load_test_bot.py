@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import random
+import signal
 import statistics
 import sys
 import time
@@ -28,6 +29,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.request import BaseRequest, RequestData
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -39,7 +41,10 @@ os.environ.setdefault("BOT_TOKEN", "TEST:TOKEN")
 from src.bot.main import build_application
 
 
-SCENARIOS_REQUIRING_CALLBACKS: Set[str] = {"full", "menu_spam"}
+SCENARIOS_REQUIRING_CALLBACKS: Set[str] = {"full", "menu_spam", "feedback_loop"}
+
+
+CURRENT_METRICS: Optional["LoadTestMetrics"] = None
 
 
 class FakeBotAPIRequest(BaseRequest):
@@ -112,6 +117,38 @@ class FakeBotAPIRequest(BaseRequest):
         return 200, body
 
 
+class LiveRateLimiter:
+    """Ограничивает частоту запросов в live-режиме, чтобы уважать лимиты Bot API."""
+
+    def __init__(self, global_rate: float, per_chat_rate: float) -> None:
+        self._global_interval = 1.0 / global_rate if global_rate > 0 else 0.0
+        self._per_chat_interval = 1.0 / per_chat_rate if per_chat_rate > 0 else 0.0
+        self._lock = asyncio.Lock()
+        self._last_global_ts = 0.0
+        self._per_chat_last: Dict[int, float] = {}
+
+    async def throttle(self, chat_id: Optional[int]) -> None:
+        if self._global_interval <= 0.0 and self._per_chat_interval <= 0.0:
+            return
+
+        async with self._lock:
+            now = time.perf_counter()
+            wait_time = 0.0
+            if self._global_interval > 0.0:
+                wait_time = max(0.0, self._last_global_ts + self._global_interval - now)
+            if self._per_chat_interval > 0.0 and chat_id is not None:
+                last_chat_ts = self._per_chat_last.get(chat_id, 0.0)
+                wait_time = max(wait_time, last_chat_ts + self._per_chat_interval - now)
+
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+                now = time.perf_counter()
+
+            if self._global_interval > 0.0:
+                self._last_global_ts = now
+            if self._per_chat_interval > 0.0 and chat_id is not None:
+                self._per_chat_last[chat_id] = now
+
 @dataclass
 class LoadTestMetrics:
     """Сбор метрик по длительности и ошибкам."""
@@ -125,6 +162,7 @@ class LoadTestMetrics:
     end_ts: float = 0.0
 
     def record(self, update: Update, duration: float, exc: Optional[BaseException] = None) -> None:
+        global CURRENT_METRICS
         self.total_updates += 1
         self.latencies.append(duration)
         update_type = "callback" if update.callback_query else "message" if update.message else "other"
@@ -134,12 +172,20 @@ class LoadTestMetrics:
         if exc is not None:
             self.errors.append(f"{type(exc).__name__}: {exc}")
 
+        CURRENT_METRICS = self
+
     def finish(self) -> None:
-        self.end_ts = time.perf_counter()
+        global CURRENT_METRICS
+        now = time.perf_counter()
+        if not self.start_ts:
+            self.start_ts = now
+        self.end_ts = max(self.end_ts, now)
+        CURRENT_METRICS = self
 
     @property
     def duration(self) -> float:
-        return max(self.end_ts - self.start_ts, 0.0)
+        effective_end = self.end_ts or time.perf_counter()
+        return max(effective_end - self.start_ts, 0.0)
 
     @staticmethod
     def _quantiles(values: Iterable[float]) -> Dict[str, float]:
@@ -471,11 +517,8 @@ class ScenarioFactory:
         updates.append(self._create_message_update(user_id, "/start", is_command=True))
 
         valid = random.random() < self.valid_email_ratio
-        email = (
-            f"stud0000{user_id:06d}@study.utmn.ru"
-            if valid
-            else f"invalid_{user_id}@example.com"
-        )
+        valid_email = "stud0000286472@study.utmn.ru"
+        email = valid_email if valid else f"invalid_{user_id}@example.com"
         updates.append(self._create_message_update(user_id, email))
 
         if not valid:
@@ -524,6 +567,19 @@ class ScenarioFactory:
             updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
             return updates
 
+        if self.scenario == "feedback_loop":
+            updates.append(self._create_callback_update(user_id, "feedback", "Главное меню"))
+            for idx in range(5):
+                updates.append(
+                    self._create_message_update(
+                        user_id,
+                        f"stud0000286472@study.utmn.ru подтверждаю участие #{idx + 1}",
+                    )
+                )
+            updates.append(self._create_callback_update(user_id, "back_to_menu", "Обратная связь"))
+            updates.append(self._create_message_update(user_id, "Помощь"))
+            return updates
+
         updates.extend(
             [
                 self._create_callback_update(user_id, "my_recommendations", "Главное меню"),
@@ -542,25 +598,76 @@ class ScenarioFactory:
         return updates
 
 
+def _extract_chat_id(update: Update) -> Optional[int]:
+    if update.message:
+        return update.message.chat.id
+    if update.callback_query and update.callback_query.message:
+        return update.callback_query.message.chat.id
+    if update.edited_message:
+        return update.edited_message.chat.id
+    if update.channel_post:
+        return update.channel_post.chat.id
+    return None
+
+
 async def process_update(
     application,
     update: Update,
     metrics: LoadTestMetrics,
     semaphore: asyncio.Semaphore,
     delay: float,
+    rate_limiter: Optional[LiveRateLimiter],
+    max_retries: int,
 ) -> None:  # type: ignore[no-untyped-def]
     async with semaphore:
         if delay:
             await asyncio.sleep(delay)
-        start = time.perf_counter()
-        try:
-            await application.process_update(update)
-            duration = time.perf_counter() - start
-            metrics.record(update, duration)
-        except Exception as exc:  # pragma: no cover - логирование ошибок
-            duration = time.perf_counter() - start
-            metrics.record(update, duration, exc)
-            logging.getLogger(__name__).exception("Ошибка обработки обновления")
+        attempts = 0
+        total_duration = 0.0
+        logger = logging.getLogger(__name__)
+        while True:
+            chat_id = _extract_chat_id(update)
+            if rate_limiter is not None:
+                await rate_limiter.throttle(chat_id)
+
+            start = time.perf_counter()
+            try:
+                await application.process_update(update)
+                total_duration += time.perf_counter() - start
+            except RetryAfter as exc:  # pragma: no cover - зависит от внешнего API
+                total_duration += time.perf_counter() - start
+                attempts += 1
+                logger.warning("Получен RetryAfter на %.2f c для chat_id=%s", exc.retry_after, chat_id)
+                if attempts >= max_retries:
+                    metrics.record(update, total_duration, exc)
+                    break
+                await asyncio.sleep(exc.retry_after)
+                continue
+            except (TimedOut, NetworkError) as exc:  # pragma: no cover - зависит от сети
+                total_duration += time.perf_counter() - start
+                attempts += 1
+                if attempts >= max_retries:
+                    metrics.record(update, total_duration, exc)
+                    logger.warning("Достигнут предел повторов после ошибки %s", type(exc).__name__)
+                    break
+                backoff = min(0.5 * (2 ** (attempts - 1)), 5.0)
+                logger.warning(
+                    "Ошибка %s при обработке обновления, повтор через %.2f c (попытка %s/%s)",
+                    type(exc).__name__,
+                    backoff,
+                    attempts,
+                    max_retries,
+                )
+                await asyncio.sleep(backoff)
+                continue
+            except Exception as exc:  # pragma: no cover - логирование ошибок
+                total_duration += time.perf_counter() - start
+                metrics.record(update, total_duration, exc)
+                logger.exception("Ошибка обработки обновления")
+                break
+            else:
+                metrics.record(update, total_duration)
+                break
 
 
 async def _auto_discover_chat_ids(
@@ -627,6 +734,8 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
     await application.initialize()
 
     metrics = LoadTestMetrics()
+    global CURRENT_METRICS
+    CURRENT_METRICS = metrics
     if args.mode == "live" and args.scenario in SCENARIOS_REQUIRING_CALLBACKS:
         fallback_scenario = "text_storm"
         logger.warning(
@@ -638,6 +747,9 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
         args.scenario = fallback_scenario
     scenario_factory = ScenarioFactory(application.bot, args.valid_email_ratio, args.scenario)
     semaphore = asyncio.Semaphore(args.concurrency)
+    rate_limiter: Optional[LiveRateLimiter] = None
+    if args.mode == "live":
+        rate_limiter = LiveRateLimiter(args.live_global_rate, args.live_chat_rate)
 
     chat_ids: List[int] = []
     if args.chat_ids:
@@ -661,14 +773,52 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
         )
     chat_ids = sorted(set(chat_ids))
 
+    stop_event = asyncio.Event()
+    min_duration_reached = asyncio.Event()
+
+    # Попытка корректно завершить тест по сигналу SIGINT (Unix)
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, stop_event.set)
+    except (NotImplementedError, RuntimeError):  # pragma: no cover - Windows/embedded
+        pass
+
+    min_duration = max(0.0, float(getattr(args, "min_duration", 0.0)))
+
+    async def duration_guard() -> None:
+        if min_duration <= 0:
+            return
+        try:
+            await asyncio.sleep(min_duration)
+        except asyncio.CancelledError:  # pragma: no cover - отмена при завершении теста
+            return
+        logger.info("Минимальная длительность %.2f с достигнута, разрешаем завершение", min_duration)
+        min_duration_reached.set()
+        stop_event.set()
+
     async def run_for_user(user_id: int) -> None:
         actual_user_id = user_id
         if chat_ids:
             actual_user_id = chat_ids[(user_id - 1) % len(chat_ids)]
-        for _ in range(args.iterations):
+        iterations_done = 0
+        while True:
             updates = scenario_factory.build_flow(actual_user_id)
             for update in updates:
-                await process_update(application, update, metrics, semaphore, args.inter_update_delay)
+                await process_update(
+                    application,
+                    update,
+                    metrics,
+                    semaphore,
+                    args.inter_update_delay,
+                    rate_limiter,
+                    args.max_retries,
+                )
+            iterations_done += 1
+            if min_duration <= 0 and iterations_done >= args.iterations:
+                break
+            if stop_event.is_set():
+                if not min_duration_reached.is_set() or iterations_done >= args.iterations:
+                    break
 
     logger.info(
         "Запуск нагрузочного теста: users=%s iterations=%s concurrency=%s",
@@ -677,11 +827,24 @@ async def run_load_test(args: argparse.Namespace) -> LoadTestMetrics:
         args.concurrency,
     )
 
+    duration_task = asyncio.create_task(duration_guard())
     tasks = [asyncio.create_task(run_for_user(user_id)) for user_id in range(1, args.users + 1)]
-    await asyncio.gather(*tasks)
 
-    metrics.finish()
-    await application.shutdown()
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:  # pragma: no cover - отмена при Ctrl+C
+        stop_event.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    finally:
+        duration_task.cancel()
+        await asyncio.gather(duration_task, return_exceptions=True)
+        metrics.finish()
+        try:
+            await application.shutdown()
+        except Exception as exc:  # pragma: no cover - защитное логирование
+            logger.warning("Не удалось корректно остановить приложение: %s", exc)
+
     logger.info("Нагрузочное тестирование завершено")
     logger.info("Сводка: %s", json.dumps(metrics.summary(), ensure_ascii=False))
     return metrics
@@ -752,7 +915,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--scenario",
-        choices=["full", "simple", "text_storm", "menu_spam"],
+        choices=["full", "simple", "text_storm", "menu_spam", "feedback_loop"],
         default="full",
         help="Тип пользовательского сценария",
     )
@@ -779,6 +942,30 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Максимальное число обновлений для автообнаружения chat_id",
     )
+    parser.add_argument(
+        "--min-duration",
+        type=float,
+        default=300.0,
+        help="Минимальная длительность теста в секундах до автоматического завершения",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Максимальное число повторов при ошибках Bot API",
+    )
+    parser.add_argument(
+        "--live-global-rate",
+        type=float,
+        default=25.0,
+        help="Глобальный лимит запросов в секунду для live-режима (0 — без ограничения)",
+    )
+    parser.add_argument(
+        "--live-chat-rate",
+        type=float,
+        default=1.0,
+        help="Лимит запросов в секунду на один чат для live-режима (0 — без ограничения)",
+    )
     return parser.parse_args()
 
 
@@ -789,15 +976,15 @@ def main() -> None:
     phases = build_profile_phases(args)
     multi_phase = len(phases) > 1
     logger = logging.getLogger(__name__)
+    global CURRENT_METRICS
     aggregated: List[Dict[str, Any]] = []
+    phase_metrics_path: Optional[Path]
+    phase_raw_path: Optional[Path]
 
     for phase in phases:
         requested_scenario = phase.scenario if phase.scenario is not None else args.scenario
         phase_args = phase.apply(args)
-        logger.info(
-            "=== Фаза профиля %s ===",
-            phase.label,
-        )
+        logger.info("=== Фаза профиля %s ===", phase.label)
         logger.info(
             "Параметры фазы: mode=%s users=%s iterations=%s concurrency=%s scenario=%s inter_update_delay=%.3f valid_email_ratio=%.2f",
             phase_args.mode,
@@ -808,8 +995,6 @@ def main() -> None:
             phase_args.inter_update_delay,
             phase_args.valid_email_ratio,
         )
-        metrics = asyncio.run(run_load_test(phase_args))
-        summary = metrics.summary()
 
         phase_metrics_path = (
             _suffix_path(args.metrics_file, phase.label) if multi_phase else args.metrics_file
@@ -821,25 +1006,56 @@ def main() -> None:
                 if multi_phase
                 else args.raw_metrics_file
             )
-        metrics.dump(phase_metrics_path, phase_raw_path)
 
-        aggregated.append(
-            {
-                "label": phase.label,
-                "mode": phase_args.mode,
-                "users": phase_args.users,
-                "iterations": phase_args.iterations,
-                "concurrency": phase_args.concurrency,
-                "inter_update_delay": phase_args.inter_update_delay,
-                "valid_email_ratio": phase_args.valid_email_ratio,
-                "scenario": phase_args.scenario,
-                "requested_scenario": requested_scenario,
-                "transport_delay": getattr(phase_args, "transport_delay", None),
-                "summary": summary,
-                "metrics_file": str(phase_metrics_path),
-                "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
-            }
-        )
+        try:
+            metrics = asyncio.run(run_load_test(phase_args))
+        except KeyboardInterrupt:
+            logger.warning("Фаза %s прервана пользователем", phase.label)
+            metrics = CURRENT_METRICS or LoadTestMetrics()
+            metrics.finish()
+            summary = metrics.summary()
+            metrics.dump(phase_metrics_path, phase_raw_path)
+            aggregated.append(
+                {
+                    "label": phase.label,
+                    "mode": phase_args.mode,
+                    "users": phase_args.users,
+                    "iterations": phase_args.iterations,
+                    "concurrency": phase_args.concurrency,
+                    "inter_update_delay": phase_args.inter_update_delay,
+                    "valid_email_ratio": phase_args.valid_email_ratio,
+                    "scenario": phase_args.scenario,
+                    "requested_scenario": requested_scenario,
+                    "transport_delay": getattr(phase_args, "transport_delay", None),
+                    "summary": summary,
+                    "metrics_file": str(phase_metrics_path),
+                    "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
+                }
+            )
+            CURRENT_METRICS = None
+            break
+        else:
+            summary = metrics.summary()
+            metrics.dump(phase_metrics_path, phase_raw_path)
+
+            aggregated.append(
+                {
+                    "label": phase.label,
+                    "mode": phase_args.mode,
+                    "users": phase_args.users,
+                    "iterations": phase_args.iterations,
+                    "concurrency": phase_args.concurrency,
+                    "inter_update_delay": phase_args.inter_update_delay,
+                    "valid_email_ratio": phase_args.valid_email_ratio,
+                    "scenario": phase_args.scenario,
+                    "requested_scenario": requested_scenario,
+                    "transport_delay": getattr(phase_args, "transport_delay", None),
+                    "summary": summary,
+                    "metrics_file": str(phase_metrics_path),
+                    "raw_metrics_file": str(phase_raw_path) if phase_raw_path else None,
+                }
+            )
+            CURRENT_METRICS = None
 
     if multi_phase:
         aggregate_path = args.metrics_file
