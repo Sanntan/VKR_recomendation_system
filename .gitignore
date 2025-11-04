@@ -7,6 +7,7 @@ __pycache__/
 env/
 venv/
 .venv/
+.venv310/
 
 # Environment
 .env
@@ -36,3 +37,4 @@ Thumbs.db1
 *.xlsx
 *.xls
 *.csv
+*.json
