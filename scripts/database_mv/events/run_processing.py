@@ -1,7 +1,7 @@
 """Вспомогательный скрипт для массовой обработки мероприятий через LLM.
 
 Скрипт выступает в роли обёртки над функциями из
-``src.recommendation.events.llm_generator`` и позволяет запускать их в
+``src.recommendation.events.llm_generator`` и позволяет запускать их
 непосредственно на GPU. За счёт того, что ``llm_generator`` инициализирует
 модели в CUDA-контексте при импорте, достаточно вызвать обработку
 мероприятий, чтобы модели были автоматически выгружены на доступный GPU.
@@ -25,8 +25,6 @@ import argparse
 import json
 from pathlib import Path
 from typing import Iterable, Optional
-
-from src.recommendation.events.llm_generator import load_events_csv, process_events
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,6 +83,40 @@ def write_results(path: Path, processed: Iterable[dict], indent: int = 2) -> Non
         json.dump(list(processed), output_file, ensure_ascii=False, indent=indent)
 
 
+def ensure_gpu_environment() -> None:
+    """Проверяет наличие GPU до импорта тяжёлых зависимостей."""
+
+    try:
+        import torch  # локальный импорт, чтобы не тянуть зависимость без надобности
+    except ImportError as error:  # pragma: no cover - зависит от окружения
+        raise SystemExit(
+            "Не удалось импортировать torch. Убедитесь, что установлен пакет "
+            "torch с поддержкой CUDA."
+        ) from error
+
+    if not torch.cuda.is_available():  # pragma: no cover - зависит от окружения
+        raise SystemExit(
+            "GPU не обнаружена. Проверьте корректность установки драйверов и CUDA."
+        )
+
+
+def import_llm_generator():
+    """Импортирует модуль генератора и оборачивает возможные ошибки."""
+
+    try:
+        from src.recommendation.events import llm_generator
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "Не удалось найти модуль src.recommendation.events.llm_generator."
+        ) from error
+    except (RuntimeError, NotImplementedError) as error:
+        raise SystemExit(
+            "Во время инициализации моделей произошла ошибка: " f"{error}"
+        ) from error
+
+    return llm_generator
+
+
 def main() -> None:
     args = parse_args()
 
@@ -96,14 +128,18 @@ def main() -> None:
             f"Не удалось найти CSV-файл с мероприятиями по пути: {input_path}"
         )
 
+    ensure_gpu_environment()
+
+    generator = import_llm_generator()
+
     print(f"📥 Загружаем мероприятия из: {input_path}")
-    events = load_events_csv(str(input_path))
+    events = generator.load_events_csv(str(input_path))
     limit: Optional[int] = args.limit
     if limit is not None and limit <= 0:
         raise ValueError("Параметр --limit должен быть положительным числом")
 
     print("⚙️  Запускаем обработку через llm_generator...")
-    processed = process_events(events, limit=limit)
+    processed = generator.process_events(events, limit=limit)
 
     print(f"\n✅ Всего обработано: {len(processed)}")
 
