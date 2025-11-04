@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from src.core.database.connection import engine
 from src.core.database.models import Directions, Clusters
 from scripts.database_mv.preprocess_excel import preprocess_excel
-from src.recommendation import clusterize_directions
+from src.recommendation.students import clusterize_directions
 
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "results"
