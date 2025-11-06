@@ -8,6 +8,8 @@ env/
 venv/
 .venv/
 .venv310/
+.unsloth_compiled_cache/
+unsloth_compiled_cache/
 
 # Environment
 .env
