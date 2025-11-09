@@ -1,11 +1,5 @@
 from pathlib import Path
-from scripts.database_mv.data_utils import (
-    load_excel,
-    validate_columns,
-    clean_and_filter,
-    keep_latest_records,
-    save_to_excel
-)
+from scripts.database_mv.data_utils import preprocess_excel as preprocess_excel_func
 
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "results"
@@ -20,6 +14,7 @@ COLUMNS_TO_KEEP = [
     "ID участника проекта",
     "Учебное заведение",
     "Специальность",
+    "Факультет",
     "Сводный отчёт",
     "Анализ информации",
     "Планирование",
@@ -32,19 +27,36 @@ COLUMNS_TO_KEEP = [
     "Эмоциональный интеллект",
     "Клиентоориентированность",
     "Коммуникация",
-    "Пассивный словарный запас"
+    "Пассивный словарный запас",
+    "Автономия",
+    "Альтруизм",
+    "Вызов",
+    "Заработок",
+    "Карьера",
+    "Креативность",
+    "Отношения",
+    "Признание",
+    "Принадлежность",
+    "Саморазвитие.1",
+    "Смысл",
+    "Сотрудничество",
+    "Стабильность",
+    "Традиция",
+    "Управление",
+    "Условия труда"
 ]
 
 REQUIRED_COLS = ["Специальность", "Учебное заведение", "Учебный год", "ID участника проекта"]
 
 def preprocess_excel(input_path: Path = INPUT_FILE, output_path: Path = OUTPUT_FILE):
-    df = load_excel(input_path)
-    validate_columns(df, REQUIRED_COLS)
-    df = clean_and_filter(df, TARGET_UNIVERSITY)
-    df = keep_latest_records(df)
-    df = df[[col for col in COLUMNS_TO_KEEP if col in df.columns]]
-    save_to_excel(df, output_path)
-    return df  # возвращаем DataFrame, чтобы можно было использовать дальше
+    """Обертка над функцией preprocess_excel из data_utils с дефолтными параметрами."""
+    return preprocess_excel_func(
+        input_path=input_path,
+        output_path=output_path,
+        target_university=TARGET_UNIVERSITY,
+        columns_to_keep=COLUMNS_TO_KEEP,
+        required_cols=REQUIRED_COLS
+    )
 
 if __name__ == "__main__":
     preprocess_excel()
