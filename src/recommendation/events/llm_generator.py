@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from unsloth import FastLanguageModel
 from sentence_transformers import SentenceTransformer
+from src.recommendation.events.utils import format_event_for_db
 
 # === Проверка и инициализация GPU ===
 if not torch.cuda.is_available():
@@ -161,41 +162,71 @@ def vectorize_short_description(short_description: str):
     return np.array(embedding, dtype=float)
 
 
-def process_events(events, limit=None):
+def process_events(events, limit=5):
     """
-    Генерирует по каждому событию:
-      - короткое описание (LLM)
-      - уточняет/извлекает дату (LLM)
-      - уточняет формат (LLM)
-      - sentence embedding для короткого описания
+    Полностью обрабатывает события: генерирует короткое описание, определяет формат,
+    извлекает даты, создает эмбеддинги и формирует полный объект события по структуре БД.
+    
     Аргументы:
-      events: список мероприятий (dict)
+      events: список мероприятий (dict) с полями: title, link, description, 
+              start_date, end_date, image
       limit: ограничение по числу обрабатываемых событий
+    
     Возвращает:
-      List[dict] с ключами: short_description, dates_extracted_raw, online_extracted_raw, embedding
+      List[dict] с полями согласно структуре Events в БД:
+      - title, short_description, description, format, start_date, end_date,
+        link, image_url, vector_embedding
     """
     processed = []
     total = len(events) if limit is None else min(len(events), limit)
+    
+    print(f"🚀 Начало обработки {total} мероприятий...")
+    
     for i, event in enumerate(events[:total]):
-        info = format_event_for_model(event)
-        desc_date = format_event_for_date_model(event)
-        desc_online = format_event_for_online_model(event)
+        try:
+            # Форматируем событие для LLM
+            info = format_event_for_model(event)
+            desc_date = format_event_for_date_model(event)
+            desc_online = format_event_for_online_model(event)
 
-        short_description = generate_short_description(info)
-        if not event.get("start_date") or not event.get("end_date"):
-            event_dates = extract_event_dates(desc_date)
-        else:
-            event_dates = f"start_date = {event['start_date']}\nend_date = {event['end_date']}"
-        if event.get("online") in [None, "", "None"]:
-            event_online = detect_event_online(desc_online)
-        else:
-            event_online = f"online = {event['online']}"
-        vector = vectorize_short_description(short_description)
-        processed.append({
-            "short_description": short_description,
-            "dates_extracted_raw": event_dates,
-            "online_extracted_raw": event_online,
-            "embedding": vector.tolist() if vector is not None else None,
-        })
-        print(f"[{i+1}/{total}] ✅ Обработано: {event.get('title')}")
+            # Генерируем короткое описание
+            short_description = generate_short_description(info)
+            
+            # Извлекаем/уточняем даты
+            if not event.get("start_date") or not event.get("end_date"):
+                event_dates = extract_event_dates(desc_date)
+            else:
+                event_dates = f"start_date = {event['start_date']}\nend_date = {event['end_date']}"
+            
+            # Определяем формат (онлайн/офлайн)
+            if event.get("online") in [None, "", "None"]:
+                event_online = detect_event_online(desc_online)
+            else:
+                event_online = f"online = {event['online']}"
+            
+            # Векторизуем короткое описание
+            vector = vectorize_short_description(short_description)
+            
+            # Объединяем исходные данные с обработанными
+            event_processed = {
+                **event,  # Исходные поля: title, link, description, start_date, end_date, image
+                "short_description": short_description,
+                "dates_extracted_raw": event_dates,
+                "online_extracted_raw": event_online,
+                "embedding": vector.tolist() if vector is not None else None,
+            }
+            
+            # Форматируем для БД
+            event_for_db = format_event_for_db(event_processed)
+            
+            processed.append(event_for_db)
+            print(f"[{i+1}/{total}] ✅ Обработано: {event.get('title', 'Без названия')}")
+            
+        except Exception as e:
+            print(f"[{i+1}/{total}] ❌ Ошибка при обработке '{event.get('title', 'Без названия')}': {e}")
+            # Добавляем событие с базовыми данными даже при ошибке
+            event_for_db = format_event_for_db(event)
+            processed.append(event_for_db)
+    
+    print(f"\n✅ Обработка завершена. Обработано {len(processed)} мероприятий.")
     return processed

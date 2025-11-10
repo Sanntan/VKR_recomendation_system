@@ -1,152 +1,119 @@
-"""Вспомогательный скрипт для массовой обработки мероприятий через LLM.
+"""Скрипт для обработки мероприятий через LLM и добавления в БД.
 
-Скрипт выступает в роли обёртки над функциями из
-``src.recommendation.events.llm_generator`` и позволяет запускать их
-непосредственно на GPU. За счёт того, что ``llm_generator`` инициализирует
-модели в CUDA-контексте при импорте, достаточно вызвать обработку
-мероприятий, чтобы модели были автоматически выгружены на доступный GPU.
+Запуск:
+    python scripts/database_mv/events/run_processing.py
 
-Пример запуска:
-
-```
-python scripts/database_mv/events/run_processing.py \
-    --input ./data/events.csv \
-    --output ./data/events_processed.json \
-    --limit 100
-```
-
-Для корректной работы убедитесь, что в окружении установлены зависимости
-``torch`` (с поддержкой CUDA), ``unsloth`` и ``sentence-transformers``.
+Доступные режимы:
+1 - Обработать все мероприятия через LLM и загрузить в БД
+2 - Загрузить в БД из существующего JSON файла (если есть)
 """
 
-from __future__ import annotations
-
-import argparse
 import json
 from pathlib import Path
-from typing import Iterable, Optional
+from src.recommendation.events import llm_generator
+from src.recommendation.events.utils import save_events_to_json, insert_events_to_db
+
+# Конфигурация
+SCRIPT_DIR = Path(__file__).resolve().parent
+INPUT_FILE = SCRIPT_DIR / "data" / "events.csv"  # Входной файл с мероприятиями
+OUTPUT_FILE = SCRIPT_DIR / "data" / "events_processed.json"  # Выходной файл с результатами
 
 
-def parse_args() -> argparse.Namespace:
-    """Считывает аргументы командной строки."""
+def show_menu() -> int:
+    """Показывает меню выбора и возвращает выбранный вариант."""
+    print("\n" + "="*50)
+    print("🎯 ОБРАБОТКА МЕРОПРИЯТИЙ")
+    print("="*50)
+    print("1 - Обработать все мероприятия через LLM и загрузить в БД")
+    print("2 - Загрузить в БД из существующего JSON файла")
+    print("="*50)
 
-    parser = argparse.ArgumentParser(description="Обработка мероприятий при помощи LLM")
-    parser.add_argument(
-        "--input",
-        type=str,
-        default="events.csv",
-        help="Путь к CSV-файлу с мероприятиями (по умолчанию events.csv в директории скрипта)",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Ограничить количество обрабатываемых записей",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Путь для сохранения результатов в JSON. Если не указан, данные не сохраняются",
-    )
-    parser.add_argument(
-        "--indent",
-        type=int,
-        default=2,
-        help="Отступ для JSON-файла (актуален только при указании --output)",
-    )
-    return parser.parse_args()
+    while True:
+        try:
+            choice = int(input("Выберите режим (1 или 2): ").strip())
+            if choice in [1, 2]:
+                return choice
+            else:
+                print("❌ Пожалуйста, введите 1 или 2")
+        except ValueError:
+            print("❌ Пожалуйста, введите число 1 или 2")
 
 
-def resolve_path(path: str, default_dir: Path) -> Path:
-    """Преобразует относительный путь относительно ``default_dir``."""
+def load_events_from_json() -> list[dict]:
+    """Загружает мероприятия из JSON файла."""
+    if not OUTPUT_FILE.exists():
+        print(f"❌ Файл {OUTPUT_FILE} не найден!")
+        return []
 
-    path_obj = Path(path)
-    if path_obj.is_absolute():
-        return path_obj
-    return default_dir / path_obj
+    try:
+        with OUTPUT_FILE.open('r', encoding='utf-8') as f:
+            events = json.load(f)
+        print(f"✅ Загружено {len(events)} мероприятий из {OUTPUT_FILE}")
+        return events
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"❌ Ошибка загрузки файла {OUTPUT_FILE}: {e}")
+        return []
 
 
-def ensure_parent_dir(path: Path) -> None:
-    """Создаёт директорию для файла, если она ещё не существует."""
+def process_all_events() -> list[dict]:
+    """Обрабатывает все мероприятия через LLM."""
+    # Проверяем наличие входного файла
+    if not INPUT_FILE.exists():
+        raise FileNotFoundError(f"❌ Файл не найден: {INPUT_FILE}")
 
-    if path.parent.exists():
+    print(f"📥 Загрузка мероприятий из: {INPUT_FILE}")
+    raw_events = llm_generator.load_events_csv(str(INPUT_FILE))
+
+    print(f"⚙️  Обработка {len(raw_events)} мероприятий через LLM...")
+    processed_events = llm_generator.process_events(raw_events)
+
+    print(f"💾 Сохранение результатов в: {OUTPUT_FILE}")
+    save_events_to_json(processed_events, OUTPUT_FILE)
+
+    return processed_events
+
+
+def load_to_database(events: list[dict]) -> None:
+    """Загружает мероприятия в базу данных."""
+    if not events:
+        print("❌ Нет мероприятий для загрузки в БД")
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
 
+    print(f"📊 Добавление {len(events)} мероприятий в БД...")
+    added, skipped = insert_events_to_db(events)
 
-def write_results(path: Path, processed: Iterable[dict], indent: int = 2) -> None:
-    """Сохраняет обработанные данные в JSON."""
-
-    ensure_parent_dir(path)
-    with path.open("w", encoding="utf-8") as output_file:
-        json.dump(list(processed), output_file, ensure_ascii=False, indent=indent)
-
-
-def ensure_gpu_environment() -> None:
-    """Проверяет наличие GPU до импорта тяжёлых зависимостей."""
-
-    try:
-        import torch  # локальный импорт, чтобы не тянуть зависимость без надобности
-    except ImportError as error:  # pragma: no cover - зависит от окружения
-        raise SystemExit(
-            "Не удалось импортировать torch. Убедитесь, что установлен пакет "
-            "torch с поддержкой CUDA."
-        ) from error
-
-    if not torch.cuda.is_available():  # pragma: no cover - зависит от окружения
-        raise SystemExit(
-            "GPU не обнаружена. Проверьте корректность установки драйверов и CUDA."
-        )
-
-
-def import_llm_generator():
-    """Импортирует модуль генератора и оборачивает возможные ошибки."""
-
-    try:
-        from src.recommendation.events import llm_generator
-    except ModuleNotFoundError as error:
-        raise SystemExit(
-            "Не удалось найти модуль src.recommendation.events.llm_generator."
-        ) from error
-    except (RuntimeError, NotImplementedError) as error:
-        raise SystemExit(
-            "Во время инициализации моделей произошла ошибка: " f"{error}"
-        ) from error
-
-    return llm_generator
+    print(f"\n✅ Готово!")
+    print(f"   📥 Загружено в БД: {added}")
+    print(f"   ⏭️  Пропущено (дубликаты): {skipped}")
+    print(f"   📝 Всего обработано: {len(events)}")
 
 
 def main() -> None:
-    args = parse_args()
+    """Основная функция с меню выбора."""
+    try:
+        # Показываем меню выбора
+        choice = show_menu()
 
-    script_dir = Path(__file__).resolve().parent
-    input_path = resolve_path(args.input, script_dir)
+        if choice == 1:
+            # Режим 1: Обработать все через LLM
+            print("\n🚀 ЗАПУСК ПОЛНОЙ ОБРАБОТКИ ЧЕРЕЗ LLM")
+            events = process_all_events()
+            load_to_database(events)
 
-    if not input_path.exists():
-        raise FileNotFoundError(
-            f"Не удалось найти CSV-файл с мероприятиями по пути: {input_path}"
-        )
+        elif choice == 2:
+            # Режим 2: Загрузить из JSON
+            print("\n🚀 ЗАГРУЗКА ИЗ JSON ФАЙЛА")
+            events = load_events_from_json()
+            if events:
+                load_to_database(events)
+            else:
+                print("❌ Не удалось загрузить мероприятия из JSON файла")
 
-    ensure_gpu_environment()
+        print("\n🎉 Работа завершена!")
 
-    generator = import_llm_generator()
-
-    print(f"📥 Загружаем мероприятия из: {input_path}")
-    events = generator.load_events_csv(str(input_path))
-    limit: Optional[int] = args.limit
-    if limit is not None and limit <= 0:
-        raise ValueError("Параметр --limit должен быть положительным числом")
-
-    print("⚙️  Запускаем обработку через llm_generator...")
-    processed = generator.process_events(events, limit=limit)
-
-    print(f"\n✅ Всего обработано: {len(processed)}")
-
-    if args.output:
-        output_path = resolve_path(args.output, script_dir)
-        write_results(output_path, processed, indent=args.indent)
-        print(f"💾 Результаты сохранены в: {output_path}")
+    except Exception as e:
+        print(f"\n💥 Критическая ошибка: {e}")
+        raise
 
 
 if __name__ == "__main__":
