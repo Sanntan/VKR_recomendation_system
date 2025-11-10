@@ -13,6 +13,11 @@ def create_direction(db: Session, title: str, cluster_id: UUID):
 def get_direction_by_id(db: Session, direction_id: UUID):
     return db.get(Directions, direction_id)
 
+def get_direction_by_title(db: Session, title: str):
+    """Найти направление по названию (без учета регистра)."""
+    stmt = select(Directions).where(Directions.title.ilike(title))
+    return db.execute(stmt).scalar_one_or_none()
+
 def get_all_directions(db: Session, limit: int = 100):
     stmt = select(Directions).limit(limit)
     return db.execute(stmt).scalars().all()
