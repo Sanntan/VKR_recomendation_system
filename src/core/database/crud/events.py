@@ -54,3 +54,38 @@ def update_event_info(db: Session, event_id: UUID, **kwargs):
 def delete_event(db: Session, event_id: UUID):
     db.execute(delete(Events).where(Events.id == event_id))
     db.commit()
+
+# Добавим функции для работы с лайками/дизлайками
+def increment_likes(db: Session, event_id: UUID):
+    """Увеличить счетчик лайков."""
+    stmt = (
+        update(Events)
+        .where(Events.id == event_id)
+        .values(likes_count=Events.likes_count + 1)
+    )
+    db.execute(stmt)
+    db.commit()
+
+def increment_dislikes(db: Session, event_id: UUID):
+    """Увеличить счетчик дизлайков."""
+    stmt = (
+        update(Events)
+        .where(Events.id == event_id)
+        .values(dislikes_count=Events.dislikes_count + 1)
+    )
+    db.execute(stmt)
+    db.commit()
+
+def get_events_by_clusters(db: Session, cluster_ids: list[UUID], limit: int = 50):
+    """Получить мероприятия по кластерам."""
+    from sqlalchemy import or_
+    stmt = (
+        select(Events)
+        .join(EventClusters, Events.id == EventClusters.event_id)
+        .where(
+            Events.is_active == True,
+            or_(*[EventClusters.cluster_id == cid for cid in cluster_ids])
+        )
+        .limit(limit)
+    )
+    return db.execute(stmt).scalars().all()

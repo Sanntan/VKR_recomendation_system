@@ -1,9 +1,10 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
+from src.bot.middlewares.auth_middleware import auth_required
 
-
+@auth_required
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает главное меню с тремя основными функциями."""
+    """Показывает главное меню с основными функциями."""
     keyboard = [
         [InlineKeyboardButton("🎯 Мои рекомендации", callback_data="my_recommendations")],
         [InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")],
@@ -14,9 +15,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = (
         "🏠 *Главное меню*\n\n"
         "Выберите нужный раздел:\n"
-        "• 🎯 *Мои рекомендации* - персональные предложения\n"
-        "• 🔍 *Поиск мероприятий* - фильтры и поиск\n"
-        "• 📝 *Обратная связь* - ваши предложения"
+        "• 🎯 *Мои рекомендации* - персональные предложения мероприятий\n"
+        "• 🔍 *Поиск мероприятий* - поиск по различным критериям\n"
+        "• 📝 *Обратная связь* - оценка работы бота (1-5 звезд)"
     )
 
     if update.callback_query:
@@ -24,12 +25,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-
+@auth_required
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /menu."""
     await show_main_menu(update, context)
 
-
+@auth_required
 async def back_to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик кнопки 'Назад' в главное меню."""
     await show_main_menu(update, context)

@@ -1,9 +1,9 @@
 import re
 
-def is_valid_utmn_email(email: str) -> bool:
+def is_valid_participant_id(participant_id: str) -> bool:
     """
-    Проверяет, соответствует ли email корпоративному формату ТюмГУ.
-    Формат: stud0000######@study.utmn.ru, где # - цифры от 0 до 9.
+    Проверяет корректность participant_id.
+    Пока что просто проверяем, что это непустая строка.
+    В будущем можно добавить более строгую валидацию.
     """
-    pattern = r'^stud0000\d{6}@study\.utmn\.ru$'
-    return re.match(pattern, email) is not None
+    return bool(participant_id and participant_id.strip())
