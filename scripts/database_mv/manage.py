@@ -18,6 +18,7 @@ from src.recommendation.events.utils import (
     load_events_from_json_file,
     process_events_from_csv,
 )
+from src.recommendation.events.score_calculation import recalculate_scores_for_all_students
 
 from scripts.database_mv.helpers.directions_clusters import run_directions_pipeline
 from scripts.database_mv.helpers.preprocess_excel import (
@@ -72,10 +73,11 @@ def run_events_menu() -> None:
         print("1 - Обработать CSV и сохранить JSON")
         print("2 - Загрузить мероприятия из JSON в БД")
         print("3 - Загрузить мероприятия и распределить по кластерам")
+        print("4 - Пересчитать scores между студентами и мероприятиями")
         print("0 - Назад")
         print("=" * 50)
 
-        choice = _prompt_choice("Выберите режим: ", {0, 1, 2, 3})
+        choice = _prompt_choice("Выберите режим: ", {0, 1, 2, 3, 4})
 
         if choice == 0:
             return
@@ -115,6 +117,24 @@ def run_events_menu() -> None:
                 print(f"   📝 Всего в JSON: {len(events)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"💥 Ошибка загрузки в БД: {exc}")
+
+        elif choice == 4:
+            print("\n🚀 ПЕРЕСЧЕТ SCORES МЕЖДУ СТУДЕНТАМИ И МЕРОПРИЯТИЯМИ")
+            try:
+                from src.core.database.connection import get_db
+                db = get_db()
+                try:
+                    stats = recalculate_scores_for_all_students(db, min_score=0.0)
+                    print(f"\n✅ Пересчет завершен успешно!")
+                    print(f"   📊 Статистика:")
+                    print(f"      - Рассчитано пар: {stats['total_calculated']}")
+                    print(f"      - Сохранено рекомендаций: {stats['total_saved']}")
+                    print(f"      - Обработано студентов: {stats['students_processed']}")
+                    print(f"      - Обработано мероприятий: {stats['events_processed']}")
+                finally:
+                    db.close()
+            except Exception as exc:  # noqa: BLE001
+                print(f"💥 Ошибка пересчета scores: {exc}")
 
 
 def run_directions_menu() -> None:
