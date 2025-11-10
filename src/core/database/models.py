@@ -47,7 +47,7 @@ class Students(Base):
     participant_id = Column(String, unique=True, nullable=False)
     institution = Column(String)
     direction_id = Column(UUID(as_uuid=True), ForeignKey("directions.id", ondelete="SET NULL"))
-    profile_embedding = Column(Vector(768))
+    profile_embedding = Column(Vector(384))
     created_at = Column(TIMESTAMP, server_default=text("NOW()"))
 
     direction = relationship("Directions", back_populates="students")
@@ -85,7 +85,7 @@ class Events(Base):
     end_date = Column(Date)
     link = Column(String)
     image_url = Column(String)
-    vector_embedding = Column(Vector(768))
+    vector_embedding = Column(Vector(384))
     likes_count = Column(Integer, default=0)
     dislikes_count = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
