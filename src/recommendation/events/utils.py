@@ -1,11 +1,14 @@
 """Утилиты для обработки мероприятий: парсинг, форматирование, валидация."""
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
-from typing import Optional, Any
-import json
 from pathlib import Path
+from typing import Any, Optional, Sequence
+
+import faiss
+import numpy as np
 
 
 def parse_date_string(date_str: str | datetime | Any) -> Optional[datetime]:
@@ -339,7 +342,181 @@ def check_event_exists(db, event: dict[str, Any]) -> bool:
     return existing is not None
 
 
-def insert_events_to_db(events: list[dict[str, Any]]) -> tuple[int, int]:
+def process_events_from_csv(
+    input_path: Path | str,
+    output_path: Path | str,
+) -> list[dict[str, Any]]:
+    """Обрабатывает мероприятия из CSV через LLM и сохраняет результат в JSON."""
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        raise FileNotFoundError(f"❌ Файл не найден: {input_path}")
+
+    from src.recommendation.events import llm_generator
+
+    print(f"📥 Загрузка мероприятий из: {input_path}")
+    raw_events = llm_generator.load_events_csv(str(input_path))
+
+    print(f"⚙️  Обработка {len(raw_events)} мероприятий через LLM...")
+    processed_events = llm_generator.process_events(raw_events)
+
+    print(f"💾 Сохранение результатов в: {output_path}")
+    save_events_to_json(processed_events, output_path)
+
+    return processed_events
+
+
+def load_events_from_json_file(output_path: Path | str) -> list[dict[str, Any]]:
+    """Загружает мероприятия из указанного JSON-файла."""
+
+    output_path = Path(output_path)
+
+    if not output_path.exists():
+        print(f"❌ Файл {output_path} не найден!")
+        return []
+
+    try:
+        with output_path.open("r", encoding="utf-8") as f:
+            events = json.load(f)
+        print(f"✅ Загружено {len(events)} мероприятий из {output_path}")
+        return events
+    except (json.JSONDecodeError, Exception) as exc:
+        print(f"❌ Ошибка загрузки файла {output_path}: {exc}")
+        return []
+
+
+def _vector_to_array(vector: Any) -> Optional[np.ndarray]:
+    """Преобразует вектор в ndarray формата float32."""
+
+    if vector is None:
+        return None
+
+    try:
+        arr = np.asarray(vector, dtype="float32")
+    except Exception:
+        return None
+
+    if arr.ndim == 0:
+        return None
+
+    if arr.ndim > 1:
+        arr = arr.reshape(-1)
+
+    if arr.size == 0:
+        return None
+
+    return arr
+
+
+def _normalize_vector(vector: np.ndarray) -> np.ndarray:
+    """Нормализует вектор для косинусного сходства."""
+
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        return vector
+    return vector / norm
+
+
+def _prepare_cluster_index(db) -> tuple[Optional[faiss.IndexFlatIP], list, int]:
+    """Готовит FAISS-индекс для центроидов кластеров."""
+
+    from sqlalchemy import select
+    from src.core.database.models import Clusters
+
+    clusters = (
+        db.execute(select(Clusters).where(Clusters.centroid.isnot(None))).scalars().all()
+    )
+
+    vectors: list[np.ndarray] = []
+    cluster_ids: list = []
+
+    for cluster in clusters:
+        array = _vector_to_array(cluster.centroid)
+        if array is None:
+            continue
+        array = _normalize_vector(array)
+        if vectors and array.shape[0] != vectors[0].shape[0]:
+            print(
+                "⚠️  Пропущен кластер с несовместимым размером вектора:",
+                cluster.title,
+            )
+            continue
+        vectors.append(array)
+        cluster_ids.append(cluster.id)
+
+    if not vectors:
+        return None, [], 0
+
+    dim = vectors[0].shape[0]
+    index = faiss.IndexFlatIP(dim)
+    matrix = np.vstack(vectors)
+    index.add(matrix)
+
+    return index, cluster_ids, dim
+
+
+def _assign_event_clusters(
+    db,
+    event_id,
+    event_title: str,
+    event_vector: Sequence[float] | np.ndarray | None,
+    index: Optional[faiss.IndexFlatIP],
+    cluster_ids: list,
+    vector_dim: int,
+    top_k: int,
+    similarity_threshold: float,
+) -> None:
+    """Сохраняет связи мероприятия с ближайшими кластерами."""
+
+    if index is None or not cluster_ids:
+        return
+
+    vector_array = _vector_to_array(event_vector)
+    if vector_array is None:
+        print(f"   ⚠️  Нет вектора для определения кластеров: {event_title}")
+        return
+
+    if vector_array.shape[0] != vector_dim:
+        print(
+            f"   ⚠️  Размерность вектора мероприятия не совпадает с кластерами: {event_title}"
+        )
+        return
+
+    vector_array = _normalize_vector(vector_array).reshape(1, -1)
+
+    top_k = max(1, min(top_k, len(cluster_ids)))
+    similarities, indices = index.search(vector_array, top_k)
+
+    from src.core.database.models import EventClusters
+
+    assigned = 0
+    for cluster_idx, similarity in zip(indices[0], similarities[0]):
+        if cluster_idx < 0:
+            continue
+        if similarity < similarity_threshold:
+            continue
+        db.add(EventClusters(event_id=event_id, cluster_id=cluster_ids[cluster_idx]))
+        assigned += 1
+
+    if assigned:
+        print(
+            f"   🧭 Привязано кластеров ({assigned}): {event_title}"
+        )
+    else:
+        print(
+            f"   ⚠️  Подходящих кластеров не найдено по порогу для: {event_title}"
+        )
+
+
+def insert_events_to_db(
+    events: list[dict[str, Any]],
+    *,
+    assign_clusters: bool = False,
+    cluster_top_k: int = 1,
+    similarity_threshold: float = 0.3,
+) -> tuple[int, int]:
     """
     Добавляет мероприятия в БД, пропуская дубликаты.
 
@@ -357,6 +534,15 @@ def insert_events_to_db(events: list[dict[str, Any]]) -> tuple[int, int]:
     skipped_count = 0
 
     with Session(engine) as db:
+        index = None
+        cluster_ids: list = []
+        vector_dim = 0
+
+        if assign_clusters:
+            index, cluster_ids, vector_dim = _prepare_cluster_index(db)
+            if index is None:
+                print("⚠️  Кластеры не найдены или без центроидов. Привязка пропущена.")
+
         for i, event in enumerate(events, 1):
             try:
                 # Проверяем, существует ли мероприятие
@@ -385,6 +571,21 @@ def insert_events_to_db(events: list[dict[str, Any]]) -> tuple[int, int]:
                 )
 
                 db.add(new_event)
+                db.flush()
+
+                if assign_clusters and index is not None and cluster_ids:
+                    _assign_event_clusters(
+                        db,
+                        new_event.id,
+                        event.get("title", "Без названия"),
+                        vector_embedding,
+                        index,
+                        cluster_ids,
+                        vector_dim,
+                        cluster_top_k,
+                        similarity_threshold,
+                    )
+
                 db.commit()
                 db.refresh(new_event)
 
