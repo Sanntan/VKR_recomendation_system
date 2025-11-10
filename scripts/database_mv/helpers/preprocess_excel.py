@@ -1,10 +1,17 @@
+"""Helpers for preprocessing academic directions Excel files."""
+
 from pathlib import Path
-from scripts.database_mv.data_utils import preprocess_excel as preprocess_excel_func
 
-BASE_DIR = Path(__file__).resolve().parent
-RESULTS_DIR = BASE_DIR / "results"
+from scripts.database_mv.helpers.data_utils import (
+    preprocess_excel as preprocess_excel_func,
+)
 
-INPUT_FILE = BASE_DIR / "123.xlsx"
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+SOURCES_DIR = BASE_DIR / "sources" / "directions"
+RESULTS_DIR = BASE_DIR / "results" / "directions"
+
+INPUT_FILE = SOURCES_DIR / "123.xlsx"
 OUTPUT_FILE = RESULTS_DIR / "filtered_data.xlsx"
 
 TARGET_UNIVERSITY = 'ФГАОУ ВО "ТЮМЕНСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ" (ТюмГУ)'
@@ -50,6 +57,10 @@ REQUIRED_COLS = ["Специальность", "Учебное заведени�
 
 def preprocess_excel(input_path: Path = INPUT_FILE, output_path: Path = OUTPUT_FILE):
     """Обертка над функцией preprocess_excel из data_utils с дефолтными параметрами."""
+
+    SOURCES_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
     return preprocess_excel_func(
         input_path=input_path,
         output_path=output_path,

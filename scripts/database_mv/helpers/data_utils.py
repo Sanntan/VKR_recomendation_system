@@ -3,7 +3,9 @@ from pathlib import Path
 
 def load_excel(file_path: Path, header_row: int = None, required_cols: list[str] = None) -> pd.DataFrame:
     if not file_path.exists():
-        raise FileNotFoundError(f"❌ Файл {file_path} не найден. Помести его в папку scripts.")
+        raise FileNotFoundError(
+            f"❌ Файл {file_path} не найден. Помести его в директорию sources."
+        )
     
     def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         """Нормализует названия столбцов: убирает пробелы в начале и конце."""
