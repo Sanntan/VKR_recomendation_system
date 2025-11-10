@@ -13,6 +13,8 @@ RESULTS_DIR = BASE_DIR / "results" / "directions"
 
 INPUT_FILE = SOURCES_DIR / "123.xlsx"
 OUTPUT_FILE = RESULTS_DIR / "filtered_data.xlsx"
+# Backwards compatibility for previous imports
+FILTERED_FILE = OUTPUT_FILE
 
 TARGET_UNIVERSITY = 'ФГАОУ ВО "ТЮМЕНСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ" (ТюмГУ)'
 
