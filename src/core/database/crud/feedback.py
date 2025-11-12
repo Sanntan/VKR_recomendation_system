@@ -8,10 +8,12 @@ from uuid import UUID
 # -------------------------------
 def create_feedback(db: Session, student_id: UUID, rating: int, comment: str = None):
     """Добавление нового отзыва от студента."""
+    from datetime import datetime
     feedback = Feedback(
         student_id=student_id,
         rating=rating,
-        comment=comment
+        comment=comment,
+        created_at=datetime.now()
     )
     db.add(feedback)
     db.commit()

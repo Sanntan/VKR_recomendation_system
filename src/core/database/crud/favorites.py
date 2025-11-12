@@ -17,7 +17,8 @@ def add_favorite(db: Session, student_id: UUID, event_id: UUID) -> Favorites | N
     if existing:
         return None  # Уже в избранном
     
-    favorite = Favorites(student_id=student_id, event_id=event_id)
+    from datetime import datetime
+    favorite = Favorites(student_id=student_id, event_id=event_id, created_at=datetime.now())
     db.add(favorite)
     db.commit()
     db.refresh(favorite)
