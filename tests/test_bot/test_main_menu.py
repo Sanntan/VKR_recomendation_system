@@ -25,9 +25,14 @@ def mock_update_with_message():
 
 
 @pytest.mark.asyncio
-async def test_show_main_menu_with_callback(mock_update_with_callback):
+@patch('src.bot.middlewares.auth_middleware.api_client.get_bot_user', new_callable=AsyncMock)
+@patch('src.bot.middlewares.auth_middleware.api_client.update_bot_user_activity', new_callable=AsyncMock)
+async def test_show_main_menu_with_callback(mock_update_activity, mock_get_bot_user, mock_update_with_callback):
     """Тестирует показ главного меню через callback."""
-    mock_context = AsyncMock()
+    mock_get_bot_user.return_value = {"is_linked": True, "student": {"id": "test"}}
+    mock_context = MagicMock()
+    mock_context.user_data = {}
+    mock_update_with_callback.callback_query.answer = AsyncMock()
 
     await show_main_menu(mock_update_with_callback, mock_context)
 
@@ -47,9 +52,13 @@ async def test_show_main_menu_with_callback(mock_update_with_callback):
 
 
 @pytest.mark.asyncio
-async def test_show_main_menu_with_message(mock_update_with_message):
+@patch('src.bot.middlewares.auth_middleware.api_client.get_bot_user', new_callable=AsyncMock)
+@patch('src.bot.middlewares.auth_middleware.api_client.update_bot_user_activity', new_callable=AsyncMock)
+async def test_show_main_menu_with_message(mock_update_activity, mock_get_bot_user, mock_update_with_message):
     """Тестирует показ главного меню через сообщение."""
-    mock_context = AsyncMock()
+    mock_get_bot_user.return_value = {"is_linked": True, "student": {"id": "test"}}
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
     await show_main_menu(mock_update_with_message, mock_context)
 
@@ -65,7 +74,8 @@ async def test_show_main_menu_with_message(mock_update_with_message):
 @pytest.mark.asyncio
 async def test_main_menu_handler(mock_update_with_message):
     """Тестирует обработчик команды /menu."""
-    mock_context = AsyncMock()
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
     await main_menu_handler(mock_update_with_message, mock_context)
 

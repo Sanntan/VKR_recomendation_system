@@ -98,3 +98,19 @@ class FeedbackResponseSchema(BaseModel):
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+
+class FavoriteSchema(BaseModel):
+    id: int
+    student_id: UUID
+    event_id: UUID
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FavoriteWithEventSchema(BaseModel):
+    id: int
+    student_id: UUID
+    event_id: UUID
+    created_at: datetime
+    event: EventSchema
+    model_config = ConfigDict(from_attributes=True)

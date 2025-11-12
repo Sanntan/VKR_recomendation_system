@@ -25,9 +25,15 @@ def _parse_datetime(value: Any) -> datetime | None:
                 return None
     return None
 
-def get_search_buttons(event_id: str) -> InlineKeyboardMarkup:
+def get_search_buttons(event_id: str, is_favorite: bool = False) -> InlineKeyboardMarkup:
     """Создает кнопки для результатов поиска."""
     keyboard = [
+        [
+            InlineKeyboardButton(
+                "❌ Удалить из избранного" if is_favorite else "⭐ В избранное",
+                callback_data=f"{'remove_favorite' if is_favorite else 'add_favorite'}_{event_id}"
+            )
+        ],
         [InlineKeyboardButton("➡️ Следующее", callback_data="search_next")],
         [InlineKeyboardButton("🔍 Новый поиск", callback_data="event_search")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
@@ -112,9 +118,20 @@ async def handle_search_filter(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['current_search_index'] = 0
 
     event = events[0]
+    event_id = str(event["id"])
+    
+    # Проверяем избранное
+    is_favorite = False
+    if student:
+        try:
+            student_uuid = UUID(student.get("id"))
+            is_favorite = await api_client.check_favorite(student_uuid, UUID(event_id))
+        except (ValueError, TypeError, APIClientError):
+            pass
+    
     await query.edit_message_text(
         f"🔍 *Найдено мероприятий: {len(events)}*\n\n" + format_event_card(event),
-        reply_markup=get_search_buttons(str(event["id"])),
+        reply_markup=get_search_buttons(event_id, is_favorite),
         parse_mode='Markdown',
         disable_web_page_preview=True
     )
@@ -165,8 +182,18 @@ async def show_next_search_result(update: Update, context: ContextTypes.DEFAULT_
     search_cache[event_id] = event
     context.user_data['search_events'] = search_cache
 
+    # Проверяем избранное
+    student = context.user_data.get('student')
+    is_favorite = False
+    if student:
+        try:
+            student_uuid = UUID(student.get("id"))
+            is_favorite = await api_client.check_favorite(student_uuid, UUID(event_id))
+        except (ValueError, TypeError, APIClientError):
+            pass
+
     new_text = f"🔍 *Найдено мероприятий: {len(results)}*\n\n" + format_event_card(event)
-    new_markup = get_search_buttons(str(event["id"]))
+    new_markup = get_search_buttons(str(event["id"]), is_favorite)
 
     current_text = query.message.text if query.message else None
     if current_text and current_text == new_text:

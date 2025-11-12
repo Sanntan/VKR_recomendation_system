@@ -72,12 +72,18 @@ def format_event_card(event: Mapping[str, Any] | Any) -> str:
 
     return text
 
-def get_recommendation_buttons(event_id: str) -> InlineKeyboardMarkup:
+def get_recommendation_buttons(event_id: str, is_favorite: bool = False) -> InlineKeyboardMarkup:
     """Создает кнопки для взаимодействия с рекомендацией."""
     keyboard = [
         [
             InlineKeyboardButton("👍 Интересно", callback_data=f"like_{event_id}"),
             InlineKeyboardButton("👎 Не интересно", callback_data=f"dislike_{event_id}")
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ Удалить из избранного" if is_favorite else "⭐ В избранное",
+                callback_data=f"{'remove_favorite' if is_favorite else 'add_favorite'}_{event_id}"
+            )
         ],
         [
             InlineKeyboardButton("🔄 Показать другие", callback_data="show_other_events"),
@@ -163,9 +169,16 @@ async def show_recommendations(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
+    # Проверяем, находится ли мероприятие в избранном
+    is_favorite = False
+    try:
+        is_favorite = await api_client.check_favorite(student_uuid, UUID(str(event_id)))
+    except APIClientError:
+        pass  # Игнорируем ошибку проверки избранного
+
     await update.callback_query.edit_message_text(
         format_event_card(event),
-        reply_markup=get_recommendation_buttons(str(event["id"])),
+        reply_markup=get_recommendation_buttons(str(event["id"]), is_favorite),
         parse_mode='Markdown',
         disable_web_page_preview=True
     )
@@ -210,9 +223,19 @@ async def handle_recommendation_feedback(update: Update, context: ContextTypes.D
             context.user_data['recommendations_events'] = event_cache
 
     if event:
+        # Проверяем избранное
+        student = context.user_data.get('student')
+        is_favorite = False
+        if student:
+            try:
+                student_uuid = UUID(student.get("id"))
+                is_favorite = await api_client.check_favorite(student_uuid, event_uuid)
+            except (ValueError, TypeError, APIClientError):
+                pass
+        
         await query.edit_message_text(
             format_event_card(event),
-            reply_markup=get_recommendation_buttons(str(event["id"])),
+            reply_markup=get_recommendation_buttons(str(event["id"]), is_favorite),
             parse_mode='Markdown',
             disable_web_page_preview=True
         )
@@ -256,9 +279,19 @@ async def show_next_recommendation(update: Update, context: ContextTypes.DEFAULT
             events_cache[str(event["id"])] = event
             context.user_data['recommendations_events'] = events_cache
 
+    # Проверяем избранное
+    student = context.user_data.get('student')
+    is_favorite = False
+    if student and event:
+        try:
+            student_uuid = UUID(student.get("id"))
+            is_favorite = await api_client.check_favorite(student_uuid, UUID(event_id))
+        except (ValueError, TypeError, APIClientError):
+            pass
+
     await query.edit_message_text(
         format_event_card(event),
-        reply_markup=get_recommendation_buttons(str(event["id"])),
+        reply_markup=get_recommendation_buttons(str(event["id"]), is_favorite),
         parse_mode='Markdown',
         disable_web_page_preview=True
     )

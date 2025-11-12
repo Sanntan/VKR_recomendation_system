@@ -1,4 +1,5 @@
 import axios from "axios";
+import { handleApiError } from "../services/errorHandler.js";
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -13,6 +14,24 @@ export const maintenanceApi = axios.create({
   baseURL: defaultBaseUrl,
   timeout: 600000 // 10 минут для операций с ML моделями и кластеризацией
 });
+
+// Добавляем interceptor для обработки ошибок
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const appError = handleApiError(error);
+    // Можно добавить глобальную обработку ошибок здесь
+    return Promise.reject(appError);
+  }
+);
+
+maintenanceApi.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const appError = handleApiError(error);
+    return Promise.reject(appError);
+  }
+);
 
 export async function checkHealth() {
   const response = await api.get("/health");
@@ -61,6 +80,48 @@ export async function recalculateRecommendationsForStudent(studentId, { minScore
       params: { min_score: minScore }
     }
   );
+  return response.data;
+}
+
+export async function fetchFavoritesByStudent(studentId, { limit = 100 } = {}) {
+  const url = `/favorites/by-student/${encodeURIComponent(studentId)}`;
+  console.log("API: fetchFavoritesByStudent - URL:", url, "limit:", limit);
+  try {
+    const response = await api.get(url, {
+      params: { limit }
+    });
+    console.log("API: fetchFavoritesByStudent - Response:", response);
+    return response.data;
+  } catch (error) {
+    console.error("API: fetchFavoritesByStudent - Error:", error);
+    throw error;
+  }
+}
+
+export async function getFavoritesCount(studentId) {
+  const url = `/favorites/by-student/${encodeURIComponent(studentId)}/count`;
+  console.log("API: getFavoritesCount - URL:", url);
+  try {
+    const response = await api.get(url);
+    console.log("API: getFavoritesCount - Response:", response);
+    return response.data;
+  } catch (error) {
+    console.error("API: getFavoritesCount - Error:", error);
+    throw error;
+  }
+}
+
+export async function addFavorite(studentId, eventId) {
+  const response = await api.post(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}`);
+  return response.data;
+}
+
+export async function removeFavorite(studentId, eventId) {
+  await api.delete(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}`);
+}
+
+export async function checkFavorite(studentId, eventId) {
+  const response = await api.get(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}/check`);
   return response.data;
 }
 

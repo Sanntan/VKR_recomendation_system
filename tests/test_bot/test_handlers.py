@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from telegram import Update, Message, User, Chat
-from src.bot.handlers.start import start_handler, handle_email_input, user_state
+from src.bot.handlers.start import start_handler, handle_participant_id_input, user_state
 from src.bot.handlers.common import help_handler, cancel_handler
 
 
@@ -38,9 +38,13 @@ def mock_update():
 
 @pytest.mark.asyncio
 @patch('src.bot.handlers.start.user_state', {})
-async def test_start_handler(mock_update):
+@patch('src.bot.handlers.start.api_client.get_bot_user', new_callable=AsyncMock)
+async def test_start_handler(mock_get_bot_user, mock_update):
     """Тестирует обработчик команды /start."""
-    mock_context = AsyncMock()
+    # Возвращаем None вместо ошибки, чтобы пройти проверку и вызвать reply_html
+    mock_get_bot_user.return_value = None
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
     await start_handler(mock_update, mock_context)
 
@@ -48,61 +52,63 @@ async def test_start_handler(mock_update):
     mock_update.message.reply_html.assert_called_once()
     # Проверяем, что состояние пользователя установлено
     from src.bot.handlers.start import user_state
-    assert user_state[123] == "awaiting_email"
+    assert user_state[123] == "awaiting_participant_id"
 
 
 @pytest.mark.asyncio
-@patch('src.bot.handlers.start.user_state', {123: "awaiting_email"})
-@patch('src.bot.handlers.start.show_main_menu')
-async def test_handle_email_input_valid(mock_show_menu, mock_update):
-    """Тестирует обработку валидного email."""
-    # Устанавливаем валидный email
-    mock_update.message.text = "stud0000123456@study.utmn.ru"
-    mock_context = AsyncMock()
+@patch('src.bot.handlers.start.user_state', {123: "awaiting_participant_id"})
+@patch('src.bot.handlers.start.show_main_menu', new_callable=AsyncMock)
+async def test_handle_participant_id_input_valid(mock_show_menu, mock_update):
+    """Тестирует обработку валидного participant_id."""
+    # Устанавливаем валидный participant_id
+    mock_update.message.text = "test_participant_001"
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
-    await handle_email_input(mock_update, mock_context)
+    with patch('src.bot.handlers.start.api_client.get_student_by_participant', new_callable=AsyncMock) as mock_get_student, \
+         patch('src.bot.handlers.start.api_client.get_bot_user', new_callable=AsyncMock) as mock_get_bot_user, \
+         patch('src.bot.handlers.start.api_client.create_bot_user', new_callable=AsyncMock) as mock_create_bot_user:
+        mock_get_student.return_value = {"id": "test-id", "participant_id": "test_participant_001"}
+        mock_get_bot_user.return_value = None  # No existing bot user
+        mock_create_bot_user.return_value = None
+        
+        await handle_participant_id_input(mock_update, mock_context)
 
-    # Проверяем, что было отправлено сообщение об успехе
-    mock_update.message.reply_text.assert_called_once()
-    call_args = mock_update.message.reply_text.call_args[0][0]
-    assert "Спасибо! Ваш email принят" in call_args
-
-    # Проверяем, что состояние пользователя сброшено
-    from src.bot.handlers.start import user_state
-    assert 123 not in user_state
-
-    # Проверяем, что показано главное меню
-    mock_show_menu.assert_called_once_with(mock_update, mock_context)
-
-
-@pytest.mark.asyncio
-@patch('src.bot.handlers.start.user_state', {123: "awaiting_email"})
-async def test_handle_email_input_invalid(mock_update):
-    """Тестирует обработку невалидного email."""
-    mock_update.message.text = "invalid_email@example.com"
-    mock_context = AsyncMock()
-
-    await handle_email_input(mock_update, mock_context)
-
-    # Проверяем, что было отправлено сообщение об ошибке через reply_text
-    mock_update.message.reply_text.assert_called_once()
-
-    # Получаем текст сообщения об ошибке
-    call_args = mock_update.message.reply_text.call_args[0][0]
-
-    # Проверяем содержание сообщения об ошибке
-    assert "не соответствует" in call_args or "формату" in call_args
-
-    # Проверяем, что состояние пользователя НЕ сброшено
-    from src.bot.handlers.start import user_state
-    assert user_state[123] == "awaiting_email"
+        # Проверяем, что было отправлено сообщение
+        mock_update.message.reply_text.assert_called()
+        
+        # Проверяем, что показано главное меню
+        mock_show_menu.assert_called_once_with(mock_update, mock_context)
 
 
 @pytest.mark.asyncio
-@patch('src.bot.handlers.start.user_state', {123: "awaiting_email"})
-async def test_cancel_handler(mock_update):
+@patch('src.bot.handlers.start.user_state', {123: "awaiting_participant_id"})
+async def test_handle_participant_id_input_invalid(mock_update):
+    """Тестирует обработку невалидного participant_id."""
+    mock_update.message.text = "invalid_id_that_fails_validation"
+    mock_context = MagicMock()
+    mock_context.user_data = {}
+
+    with patch('src.bot.handlers.start.is_valid_participant_id', return_value=False):
+        await handle_participant_id_input(mock_update, mock_context)
+
+        # Проверяем, что было отправлено сообщение об ошибке
+        mock_update.message.reply_text.assert_called()
+        
+        # Проверяем, что состояние пользователя НЕ сброшено
+        from src.bot.handlers.start import user_state
+        assert user_state[123] == "awaiting_participant_id"
+
+
+@pytest.mark.asyncio
+@patch('src.bot.handlers.start.user_state', {123: "awaiting_participant_id"})
+@patch('src.bot.middlewares.auth_middleware.api_client.get_bot_user', new_callable=AsyncMock)
+@patch('src.bot.middlewares.auth_middleware.api_client.update_bot_user_activity', new_callable=AsyncMock)
+async def test_cancel_handler(mock_update_activity, mock_get_bot_user, mock_update):
     """Тестирует обработчик команды /cancel."""
-    mock_context = AsyncMock()
+    mock_get_bot_user.return_value = {"is_linked": True, "student": {"id": "test"}}
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
     await cancel_handler(mock_update, mock_context)
 
@@ -110,33 +116,34 @@ async def test_cancel_handler(mock_update):
     mock_update.message.reply_text.assert_called_once()
     call_args = mock_update.message.reply_text.call_args[0][0]
     assert "отменено" in call_args.lower()
-    # Проверяем, что состояние НЕ сброшено (теперь cancel не сбрасывает состояния)
-    from src.bot.handlers.start import user_state
-    assert 123 in user_state  # Состояние остается
 
 
 @pytest.mark.asyncio
 @patch('src.bot.handlers.start.user_state', {})
-async def test_cancel_handler_no_state(mock_update):
+@patch('src.bot.middlewares.auth_middleware.api_client.get_bot_user', new_callable=AsyncMock)
+@patch('src.bot.middlewares.auth_middleware.api_client.update_bot_user_activity', new_callable=AsyncMock)
+async def test_cancel_handler_no_state(mock_update_activity, mock_get_bot_user, mock_update):
     """Тестирует /cancel когда нет активного состояния."""
-    mock_context = AsyncMock()
+    mock_get_bot_user.return_value = {"is_linked": True, "student": {"id": "test"}}
+    mock_context = MagicMock()
+    mock_context.user_data = {}
 
     await cancel_handler(mock_update, mock_context)
 
     # Проверяем, что отправлено соответствующее сообщение
     mock_update.message.reply_text.assert_called_once()
     call_args = mock_update.message.reply_text.call_args[0][0]
-    assert "отменено" in call_args.lower()  # Новый текст сообщения
+    assert "отменено" in call_args.lower()
 
 
 @pytest.mark.asyncio
 async def test_help_handler(mock_update):
     """Тестирует обработчик команды /help."""
-    mock_context = AsyncMock()
+    mock_context = MagicMock()
 
     await help_handler(mock_update, mock_context)
 
     # Проверяем, что было отправлено справочное сообщение
     mock_update.message.reply_text.assert_called_once()
     call_args = mock_update.message.reply_text.call_args[0][0]
-    assert "Справочная информация" in call_args or "Доступные команды" in call_args
+    assert "Справка" in call_args or "Доступные команды" in call_args

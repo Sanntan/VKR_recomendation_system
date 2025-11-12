@@ -129,14 +129,13 @@ def test_parse_event_page_handles_request_error(monkeypatch):
     result = parse_event_page("https://fake-url")
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {
-        "title",
-        "link",
-        "description",
-        "start_date",
-        "end_date",
-        "image",
-    }
+    # Функция возвращает также "online" ключ
+    assert "title" in result
+    assert "link" in result
+    assert "description" in result
+    assert "start_date" in result
+    assert "end_date" in result
+    assert "image" in result
     assert result["title"] == ""
     assert result["description"] == ""
     assert result["image"] == ""
@@ -161,13 +160,14 @@ def test_get_event_links_unique_and_normalized(monkeypatch):
 
     links = get_event_links(BASE_URL + "/events", scroll_limit=1, headless=True)
 
-    # Уникальность
-    assert len(links) == len(set(links))
+    # Уникальность - проверяем по ключу 'link' в словарях
+    link_strings = [link_dict.get("link", "") for link_dict in links]
+    assert len(link_strings) == len(set(link_strings))
 
     # Нормализуем относительные ссылки для проверки
     normalized = [
         (BASE_URL.rstrip("/") + link) if link.startswith("/") else link
-        for link in links
+        for link in link_strings
     ]
 
     # Все ссылки после нормализации должны начинаться с BASE_URL
