@@ -315,13 +315,6 @@ def create_recommendations_docx(recommendations: list[Dict[str, Any]], events: D
             desc_format = desc_para.runs[0].font
             desc_format.size = Pt(11)
         
-        # Полное описание, если есть
-        if event.get("description"):
-            full_desc_para = doc.add_paragraph(event["description"])
-            full_desc_format = full_desc_para.runs[0].font
-            full_desc_format.size = Pt(10)
-            full_desc_format.italic = True
-        
         # Информация о мероприятии
         info_para = doc.add_paragraph()
         
@@ -494,12 +487,20 @@ async def export_recommendations(update: Update, context: ContextTypes.DEFAULT_T
     
     try:
         if query:
+            # Отправляем файл
             await query.message.reply_document(
                 document=docx_buffer,
                 filename=filename,
                 caption=f"📄 Ваши рекомендации ({len(recommendations)} мероприятий)"
             )
-            await query.delete()
+            # Удаляем сообщение с загрузкой
+            try:
+                await query.message.delete()
+            except Exception:
+                # Если не удалось удалить, просто редактируем на финальное сообщение
+                await query.edit_message_text(
+                    f"✅ Файл успешно отправлен!\n📄 Ваши рекомендации ({len(recommendations)} мероприятий)"
+                )
         else:
             await update.message.reply_document(
                 document=docx_buffer,

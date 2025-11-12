@@ -691,6 +691,7 @@ onMounted(() => {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .form-row label {
@@ -701,6 +702,13 @@ onMounted(() => {
   color: #495057;
   flex: 1;
   min-width: 120px;
+}
+
+.form-row label.checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  flex: 0 1 auto;
+  min-width: auto;
 }
 
 .form-row input[type="number"],
@@ -724,7 +732,7 @@ onMounted(() => {
 .checkbox {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   font-size: 0.9rem;
   color: #495057;
@@ -733,7 +741,15 @@ onMounted(() => {
 .checkbox input {
   width: 18px;
   height: 18px;
+  min-width: 18px;
+  margin-top: 0.1rem;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkbox span {
+  line-height: 1.5;
+  flex: 1;
 }
 
 .actions {
