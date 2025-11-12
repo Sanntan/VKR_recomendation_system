@@ -9,7 +9,7 @@ export default defineConfig({
     host: "localhost",
     port: 5173,
     proxy: {
-      "^/(students|events|bot|recommendations|feedback|health).*": {
+      "^/(students|events|bot|recommendations|feedback|maintenance|health).*": {
         target: API_TARGET,
         changeOrigin: true,
         secure: false

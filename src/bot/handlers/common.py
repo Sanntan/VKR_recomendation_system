@@ -18,17 +18,23 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• 🔍 Поиск мероприятий - фильтры и поиск\n"
         "• 📝 Обратная связь - ваши предложения"
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    message = update.message or update.edited_message
+    if message:
+        await message.reply_text(help_text, parse_mode='Markdown')
 
 @auth_required
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает команду /cancel."""
-    await update.message.reply_text("Действие отменено.")
+    message = update.message or update.edited_message
+    if message:
+        await message.reply_text("Действие отменено.")
 
 @allow_unauthorized
 async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает неизвестные команды."""
-    await update.message.reply_text(
-        "❓ Неизвестная команда.\n\n"
-        "Используйте /menu для просмотра доступных функций или /help для справки."
-    )
+    message = update.message or update.edited_message
+    if message:
+        await message.reply_text(
+            "❓ Неизвестная команда.\n\n"
+            "Используйте /menu для просмотра доступных функций или /help для справки."
+        )

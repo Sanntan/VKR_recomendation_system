@@ -7,6 +7,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Показывает главное меню с основными функциями."""
     keyboard = [
         [InlineKeyboardButton("🎯 Мои рекомендации", callback_data="my_recommendations")],
+        [InlineKeyboardButton("📥 Выгрузить рекомендации", callback_data="export_recommendations")],
         [InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")],
         [InlineKeyboardButton("📝 Обратная связь", callback_data="feedback")]
     ]
@@ -16,6 +17,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "🏠 *Главное меню*\n\n"
         "Выберите нужный раздел:\n"
         "• 🎯 *Мои рекомендации* - персональные предложения мероприятий\n"
+        "• 📥 *Выгрузить рекомендации* - скачать все рекомендации в формате DOCX\n"
         "• 🔍 *Поиск мероприятий* - поиск по различным критериям\n"
         "• 📝 *Обратная связь* - оценка работы бота (1-5 звезд)"
     )
@@ -23,7 +25,10 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     else:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        # Обрабатываем как обычное сообщение, так и отредактированное
+        message = update.message or update.edited_message
+        if message:
+            await message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 @auth_required
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

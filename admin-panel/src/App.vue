@@ -39,6 +39,7 @@ import StatusIndicator from "./components/StatusIndicator.vue";
 import StudentsView from "./components/StudentsView.vue";
 import EventsView from "./components/EventsView.vue";
 import RecommendationsView from "./components/RecommendationsView.vue";
+import DatabaseToolsView from "./components/DatabaseToolsView.vue";
 
 const navigationItems = [
   {
@@ -55,13 +56,19 @@ const navigationItems = [
     id: "recommendations",
     title: "Рекомендации",
     description: "Диагностика работы рекомендаций по студенту"
+  },
+  {
+    id: "maintenance",
+    title: "База данных",
+    description: "Инструменты загрузки данных и обслуживания"
   }
 ];
 
 const viewComponents = {
   students: StudentsView,
   events: EventsView,
-  recommendations: RecommendationsView
+  recommendations: RecommendationsView,
+  maintenance: DatabaseToolsView
 };
 
 const currentView = ref("students");

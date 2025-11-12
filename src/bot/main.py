@@ -10,7 +10,7 @@ from src.bot.handlers.start import start_handler, handle_participant_id_input
 from src.bot.handlers.common import help_handler, cancel_handler, unknown_command_handler
 from src.bot.handlers.main_menu import main_menu_handler, show_main_menu, back_to_menu_handler
 from src.bot.handlers.recommendations import show_recommendations, handle_recommendation_feedback, \
-    show_next_recommendation
+    show_next_recommendation, export_recommendations
 from src.bot.handlers.search import show_search_filters, handle_search_filter, show_next_search_result
 from src.bot.handlers.feedback import (
     request_feedback, handle_rating_selection, add_comment, send_feedback,
@@ -80,6 +80,7 @@ def build_application(
     # Обработчики callback queries для главного меню
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern="^back_to_menu$"))
     application.add_handler(CallbackQueryHandler(show_recommendations, pattern="^my_recommendations$"))
+    application.add_handler(CallbackQueryHandler(export_recommendations, pattern="^export_recommendations$"))
     application.add_handler(CallbackQueryHandler(show_search_filters, pattern="^event_search$"))
 
     # Обработчики для рекомендаций
