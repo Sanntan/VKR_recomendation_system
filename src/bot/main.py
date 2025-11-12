@@ -74,6 +74,9 @@ def build_application(
     application.add_handler(CommandHandler("menu", main_menu_handler))
     application.add_handler(CommandHandler("cancel", cancel_handler))
 
+    # Добавляем ConversationHandler для обратной связи (регистрируем раньше общих коллбеков)
+    application.add_handler(feedback_conv_handler)
+
     # Обработчики callback queries для главного меню
     application.add_handler(CallbackQueryHandler(back_to_menu_handler, pattern="^back_to_menu$"))
     application.add_handler(CallbackQueryHandler(show_recommendations, pattern="^my_recommendations$"))
@@ -86,9 +89,6 @@ def build_application(
     # Обработчики для поиска
     application.add_handler(CallbackQueryHandler(handle_search_filter, pattern="^filter_"))
     application.add_handler(CallbackQueryHandler(show_next_search_result, pattern="^search_next$"))
-
-    # Добавляем ConversationHandler для обратной связи
-    application.add_handler(feedback_conv_handler)
 
     # Обработчик для ввода participant_id (ожидаем его после команды /start)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_participant_id_input))
