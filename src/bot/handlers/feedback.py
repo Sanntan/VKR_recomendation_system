@@ -11,6 +11,11 @@ WAITING_FEEDBACK_COMMENT = 2
 @auth_required
 async def request_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Запрашивает обратную связь от пользователя."""
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    context.user_data.pop('feedback_rating', None)
+
     keyboard = [
         [InlineKeyboardButton("⭐ 1", callback_data="rating_1")],
         [InlineKeyboardButton("⭐ 2", callback_data="rating_2")],
@@ -140,10 +145,13 @@ async def save_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, comm
     else:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
 
+    context.user_data.pop('feedback_rating', None)
+
 @auth_required
 async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет процесс обратной связи."""
     await update.callback_query.answer()
+    context.user_data.pop('feedback_rating', None)
     from .main_menu import show_main_menu
     await show_main_menu(update, context)
     return ConversationHandler.END
