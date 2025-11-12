@@ -191,6 +191,95 @@
         </div>
       </article>
 
+      <article class="section-card">
+        <header>
+          <h3>Студенты</h3>
+          <p>Обработка Excel, генерация JSON и загрузка в БД</p>
+        </header>
+
+        <div class="section-block">
+          <div class="block-header">
+            <h4>Обработка Excel → JSON</h4>
+            <p v-if="info" class="file-hint">
+              По умолчанию: <code>{{ info.studentsInputFile }}</code> → <code>{{ info.studentsOutputFile }}</code>
+            </p>
+          </div>
+
+          <div class="file-input-group">
+            <label class="file-label">
+              <span>Excel файл</span>
+              <div class="file-selector">
+                <button type="button" class="btn-select" @click="() => studentsExcelFileInput?.click()">
+                  {{ studentsExcelFile ? studentsExcelFile.name : "Выбрать файл" }}
+                </button>
+                <input
+                  ref="studentsExcelFileInput"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  style="display: none"
+                  @change="handleStudentsExcelFileSelect"
+                />
+              </div>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="button" @click="handleProcessStudentsExcel" :disabled="loading.processStudentsExcel">
+              {{ loading.processStudentsExcel ? "Обработка..." : "Обработать Excel" }}
+            </button>
+          </div>
+
+          <ResultBlock :result="results.processStudentsExcel" :error="errors.processStudentsExcel" />
+        </div>
+
+        <div class="section-block">
+          <div class="block-header">
+            <h4>Загрузка JSON в БД</h4>
+            <p v-if="info" class="file-hint">
+              По умолчанию: <code>{{ info.studentsOutputFile }}</code>
+            </p>
+          </div>
+
+          <div class="file-input-group">
+            <label class="file-label">
+              <span>JSON файл</span>
+              <div class="file-selector">
+                <button type="button" class="btn-select" @click="() => studentsJsonFileInput?.click()">
+                  {{ studentsJsonFile ? studentsJsonFile.name : "Выбрать файл" }}
+                </button>
+                <input
+                  ref="studentsJsonFileInput"
+                  type="file"
+                  accept=".json"
+                  style="display: none"
+                  @change="handleStudentsJsonFileSelect"
+                />
+              </div>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label>
+              <span>Учебное заведение</span>
+              <input type="text" v-model="defaultInstitution" placeholder="ФГАОУ ВО «ТЮМЕНСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ» (ТюмГУ)"/>
+            </label>
+            <label>
+              <span>Лимит студентов</span>
+              <input type="number" v-model.number="studentsLimit" min="1" placeholder="Без ограничений" />
+              <small style="color: #6c757d; font-size: 0.8rem;">Оставьте пустым для загрузки всех</small>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="button" @click="handleLoadStudents" :disabled="loading.loadStudents">
+              {{ loading.loadStudents ? "Загрузка..." : "Загрузить в БД" }}
+            </button>
+          </div>
+
+          <ResultBlock :result="results.loadStudents" :error="errors.loadStudents" />
+        </div>
+      </article>
+
       <article class="section-card warning">
         <header>
           <h3>Сброс базы данных</h3>
@@ -241,7 +330,9 @@ import {
   maintenancePreprocessDirections,
   maintenanceProcessEventsCsv,
   maintenanceResetDatabase,
-  recalculateRecommendationsGlobal
+  recalculateRecommendationsGlobal,
+  maintenanceProcessStudentsExcel,
+  maintenanceLoadStudentsFromJson
 } from "../api/client.js";
 
 const ResultBlock = defineComponent({
@@ -307,6 +398,8 @@ const loading = reactive({
   recalculate: false,
   preprocess: false,
   clusterize: false,
+  processStudentsExcel: false,
+  loadStudents: false,
   reset: false
 });
 
@@ -316,6 +409,8 @@ const results = reactive({
   recalculate: null,
   preprocess: null,
   clusterize: null,
+  processStudentsExcel: null,
+  loadStudents: null,
   reset: null
 });
 
@@ -325,6 +420,8 @@ const errors = reactive({
   recalculate: null,
   preprocess: null,
   clusterize: null,
+  processStudentsExcel: null,
+  loadStudents: null,
   reset: null
 });
 
@@ -349,6 +446,15 @@ const jsonFileInput = ref(null);
 const excelFile = ref(null);
 const excelFileInput = ref(null);
 
+const studentsExcelFile = ref(null);
+const studentsExcelFileInput = ref(null);
+
+const studentsJsonFile = ref(null);
+const studentsJsonFileInput = ref(null);
+
+const defaultInstitution = ref("ФГАОУ ВО «ТЮМЕНСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ» (ТюмГУ)");
+const studentsLimit = ref(null);
+
 function handleCsvFileSelect(event) {
   csvFile.value = event.target.files[0] || null;
 }
@@ -359,6 +465,14 @@ function handleJsonFileSelect(event) {
 
 function handleExcelFileSelect(event) {
   excelFile.value = event.target.files[0] || null;
+}
+
+function handleStudentsExcelFileSelect(event) {
+  studentsExcelFile.value = event.target.files[0] || null;
+}
+
+function handleStudentsJsonFileSelect(event) {
+  studentsJsonFile.value = event.target.files[0] || null;
 }
 
 function extractError(error) {
@@ -397,6 +511,8 @@ async function loadInfo() {
       eventsOutputFile: response.events_output_file ?? response.eventsOutputFile,
       directionsInputFile: response.directions_input_file ?? response.directionsInputFile,
       directionsOutputFile: response.directions_output_file ?? response.directionsOutputFile,
+      studentsInputFile: response.students_input_file ?? response.studentsInputFile,
+      studentsOutputFile: response.students_output_file ?? response.studentsOutputFile,
       clusterTopKDefault: response.cluster_top_k_default ?? response.clusterTopKDefault ?? 3,
       similarityThresholdDefault:
         response.similarity_threshold_default ?? response.similarityThresholdDefault ?? 0.35
@@ -535,6 +651,61 @@ async function handleClusterizeDirections() {
     setError("clusterize", error);
   } finally {
     loading.clusterize = false;
+  }
+}
+
+async function handleProcessStudentsExcel() {
+  loading.processStudentsExcel = true;
+  clearResult("processStudentsExcel");
+  try {
+    const response = await maintenanceProcessStudentsExcel({
+      file: studentsExcelFile.value,
+      inputFile: undefined,
+      outputFile: undefined
+    });
+    setResult("processStudentsExcel", {
+      message: `Обработано студентов: ${response.processed}`,
+      log: response.log,
+      details: [
+        { label: "Excel", value: response.input_file ?? response.inputFile },
+        { label: "JSON", value: response.output_file ?? response.outputFile }
+      ]
+    });
+    studentsExcelFile.value = null;
+    if (studentsExcelFileInput.value) studentsExcelFileInput.value.value = "";
+  } catch (error) {
+    setError("processStudentsExcel", error);
+  } finally {
+    loading.processStudentsExcel = false;
+  }
+}
+
+async function handleLoadStudents() {
+  loading.loadStudents = true;
+  clearResult("loadStudents");
+  try {
+    const response = await maintenanceLoadStudentsFromJson({
+      file: studentsJsonFile.value,
+      inputFile: undefined,
+      defaultInstitution: defaultInstitution.value,
+      limit: studentsLimit.value && studentsLimit.value > 0 ? studentsLimit.value : undefined
+    });
+    const limitText = studentsLimit.value && studentsLimit.value > 0 ? ` (лимит: ${studentsLimit.value})` : "";
+    setResult("loadStudents", {
+      message: `Вставлено ${response.added}, пропущено ${response.skipped} из ${response.total_in_file}${limitText}`,
+      log: response.log,
+      details: [
+        { label: "JSON", value: response.output_file ?? response.outputFile },
+        { label: "Учебное заведение", value: defaultInstitution.value },
+        { label: "Лимит", value: studentsLimit.value && studentsLimit.value > 0 ? studentsLimit.value.toString() : "Без ограничений" }
+      ]
+    });
+    studentsJsonFile.value = null;
+    if (studentsJsonFileInput.value) studentsJsonFileInput.value.value = "";
+  } catch (error) {
+    setError("loadStudents", error);
+  } finally {
+    loading.loadStudents = false;
   }
 }
 

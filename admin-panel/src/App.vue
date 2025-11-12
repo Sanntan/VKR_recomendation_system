@@ -29,6 +29,7 @@
         <component :is="activeComponent" />
       </main>
     </div>
+    <ErrorNotification />
   </div>
 </template>
 
@@ -40,6 +41,7 @@ import StudentsView from "./components/StudentsView.vue";
 import EventsView from "./components/EventsView.vue";
 import RecommendationsView from "./components/RecommendationsView.vue";
 import DatabaseToolsView from "./components/DatabaseToolsView.vue";
+import ErrorNotification from "./components/ErrorNotification.vue";
 
 const navigationItems = [
   {

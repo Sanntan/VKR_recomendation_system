@@ -9,6 +9,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("🎯 Мои рекомендации", callback_data="my_recommendations")],
         [InlineKeyboardButton("📥 Выгрузить рекомендации", callback_data="export_recommendations")],
         [InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")],
+        [InlineKeyboardButton("⭐ Личный кабинет", callback_data="personal_cabinet")],
         [InlineKeyboardButton("📝 Обратная связь", callback_data="feedback")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -19,6 +20,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "• 🎯 *Мои рекомендации* - персональные предложения мероприятий\n"
         "• 📥 *Выгрузить рекомендации* - скачать все рекомендации в формате DOCX\n"
         "• 🔍 *Поиск мероприятий* - поиск по различным критериям\n"
+        "• ⭐ *Личный кабинет* - избранные мероприятия и профиль\n"
         "• 📝 *Обратная связь* - оценка работы бота (1-5 звезд)"
     )
 

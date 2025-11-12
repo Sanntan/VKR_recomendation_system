@@ -53,6 +53,7 @@ class Students(Base):
     direction = relationship("Directions", back_populates="students")
     recommendations = relationship("Recommendations", back_populates="student")
     feedback = relationship("Feedback", back_populates="student")
+    favorites = relationship("Favorites", back_populates="student")
     bot_user = relationship("BotUsers", back_populates="student", uselist=False)
 
 # ==========================================
@@ -93,6 +94,7 @@ class Events(Base):
 
     clusters = relationship("EventClusters", back_populates="event")
     recommendations = relationship("Recommendations", back_populates="event")
+    favorites = relationship("Favorites", back_populates="event")
 
 # ==========================================
 # EVENT ⇄ CLUSTER (many-to-many)
@@ -135,3 +137,17 @@ class Feedback(Base):
     created_at = Column(TIMESTAMP, server_default=text("NOW()"))
 
     student = relationship("Students", back_populates="feedback")
+
+# ==========================================
+# FAVORITES (избранные мероприятия)
+# ==========================================
+class Favorites(Base):
+    __tablename__ = "favorites"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=text("NOW()"))
+
+    student = relationship("Students", back_populates="favorites")
+    event = relationship("Events", back_populates="favorites")

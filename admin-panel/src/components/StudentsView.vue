@@ -51,7 +51,65 @@
         <span class="label">Создан</span>
         <span>{{ formatDate(student.created_at) }}</span>
       </div>
+      <div class="info-row" v-if="favoritesCount !== null">
+        <span class="label">Избранных мероприятий</span>
+        <span>{{ favoritesCount }}</span>
+      </div>
     </div>
+
+    <section v-if="student" class="list-section">
+      <header class="list-header">
+        <div>
+          <h3>Избранные мероприятия</h3>
+          <p v-if="favoritesCount !== null">Всего: {{ favoritesCount }}</p>
+          <p v-else-if="!favoritesLoading" style="color: #6c757d; font-size: 0.85rem;">Нажмите "Обновить" для загрузки</p>
+        </div>
+        <button type="button" class="secondary" @click="loadFavorites" :disabled="favoritesLoading">
+          {{ favoritesLoading ? "Загрузка..." : "Обновить" }}
+        </button>
+      </header>
+
+      <div v-if="favoritesError" class="alert error">
+        {{ favoritesError }}
+      </div>
+
+      <div v-else>
+        <div v-if="favoritesLoading && favorites.length === 0" class="list-loader">
+          Загрузка избранных...
+        </div>
+
+        <div v-else-if="!favoritesLoading && favorites.length === 0 && favoritesCount === 0" class="placeholder">
+          У студента нет избранных мероприятий.
+        </div>
+
+        <div v-else-if="!favoritesLoading && favorites.length === 0 && favoritesCount !== null && favoritesCount > 0" class="alert error">
+          Загружено 0 из {{ favoritesCount }} избранных. Возможно, некоторые мероприятия были удалены.
+        </div>
+
+        <ul v-else-if="favorites.length > 0" class="events-list">
+          <li v-for="fav in favorites" :key="fav.id">
+            <div class="event-item">
+              <div class="event-header">
+                <h4>{{ fav.event?.title || "Без названия" }}</h4>
+                <span class="event-meta">{{ formatDate(fav.created_at) }}</span>
+              </div>
+              <div class="event-description" v-if="fav.event?.short_description">
+                {{ fav.event.short_description }}
+              </div>
+              <div class="event-details">
+                <span v-if="fav.event?.start_date">
+                  📅 {{ formatDate(fav.event.start_date) }}
+                </span>
+                <span v-if="fav.event?.format">🎯 {{ fav.event.format }}</span>
+                <span v-if="fav.event?.link">
+                  <a :href="fav.event.link" target="_blank" rel="noopener">🔗 Ссылка</a>
+                </span>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
 
     <section class="list-section">
       <header class="list-header">
@@ -118,7 +176,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
-import { fetchStudentByParticipant, fetchStudents } from "../api/client.js";
+import { fetchStudentByParticipant, fetchStudents, fetchFavoritesByStudent, getFavoritesCount } from "../api/client.js";
 
 const participantId = ref("");
 const searchLoading = ref(false);
@@ -132,13 +190,23 @@ const totalStudents = ref(0);
 const listLimit = ref(20);
 const nextOffset = ref(0);
 
+const favorites = ref([]);
+const favoritesLoading = ref(false);
+const favoritesError = ref("");
+const favoritesCount = ref(null);
+
 const hasMoreStudents = computed(() => students.value.length < totalStudents.value);
 
 function formatDate(dateValue) {
   if (!dateValue) return "—";
+  // Обрабатываем как DATE, так и TIMESTAMP
   const date = new Date(dateValue);
   if (Number.isNaN(date.getTime())) return dateValue;
-  return date.toLocaleString("ru-RU");
+  // Для DATE показываем только дату, для TIMESTAMP - дату и время
+  if (dateValue.includes('T') || dateValue.includes(' ')) {
+    return date.toLocaleString("ru-RU");
+  }
+  return date.toLocaleDateString("ru-RU");
 }
 
 async function loadStudent() {
@@ -150,9 +218,15 @@ async function loadStudent() {
   try {
     const response = await fetchStudentByParticipant(participantId.value.trim());
     student.value = response;
+    // Загружаем избранные после загрузки студента
+    if (student.value?.id) {
+      await loadFavorites();
+    }
   } catch (err) {
     console.error(err);
     student.value = null;
+    favorites.value = [];
+    favoritesCount.value = null;
     if (err?.response?.status === 404) {
       searchError.value = "Студент не найден";
     } else {
@@ -164,9 +238,70 @@ async function loadStudent() {
 }
 
 function selectStudent(item) {
+  console.log("=== selectStudent called ===");
+  console.log("Selected item:", item);
   student.value = item;
   participantId.value = item.participant_id;
   searchError.value = "";
+  console.log("Calling loadFavorites from selectStudent");
+  loadFavorites();
+}
+
+async function loadFavorites() {
+  console.log("=== loadFavorites called ===");
+  console.log("student.value:", student.value);
+  console.log("student.value?.id:", student.value?.id);
+  
+  if (!student.value?.id) {
+    console.warn("No student ID, clearing favorites");
+    favorites.value = [];
+    favoritesCount.value = null;
+    return;
+  }
+
+  favoritesLoading.value = true;
+  favoritesError.value = "";
+
+  try {
+    const studentId = student.value.id;
+    console.log("Loading favorites for student ID:", studentId);
+    console.log("Student ID type:", typeof studentId);
+    console.log("API call will be made to:", `/favorites/by-student/${studentId}`);
+    
+    const [favoritesData, countData] = await Promise.all([
+      fetchFavoritesByStudent(studentId, { limit: 100 }),
+      getFavoritesCount(studentId)
+    ]);
+    
+    console.log("Favorites data received:", favoritesData);
+    console.log("Count data received:", countData);
+    
+    // Проверяем, что данные корректны
+    if (!Array.isArray(favoritesData)) {
+      console.warn("Favorites data is not an array:", favoritesData);
+      favorites.value = [];
+    } else {
+      favorites.value = favoritesData;
+      console.log(`Loaded ${favorites.value.length} favorites`);
+    }
+    
+    favoritesCount.value = countData?.count ?? 0;
+    console.log("Favorites count:", favoritesCount.value);
+  } catch (err) {
+    console.error("=== ERROR loading favorites ===");
+    console.error("Error object:", err);
+    console.error("Error message:", err?.message);
+    console.error("Error response:", err?.response);
+    console.error("Error response data:", err?.response?.data);
+    console.error("Error response status:", err?.response?.status);
+    const errorMessage = err?.response?.data?.detail || err?.response?.data?.message || err?.message || "Неизвестная ошибка";
+    favoritesError.value = `Не удалось загрузить избранные мероприятия: ${errorMessage}`;
+    favorites.value = [];
+    favoritesCount.value = null;
+  } finally {
+    favoritesLoading.value = false;
+    console.log("=== loadFavorites finished ===");
+  }
 }
 
 async function loadStudents({ reset = false } = {}) {
@@ -218,6 +353,25 @@ watch(listLimit, () => {
 onMounted(() => {
   loadStudents({ reset: true });
 });
+
+watch(
+  () => student.value?.id,
+  (newStudentId, oldStudentId) => {
+    console.log("=== Watch triggered ===");
+    console.log("New student ID:", newStudentId);
+    console.log("Old student ID:", oldStudentId);
+    if (newStudentId && newStudentId !== oldStudentId) {
+      console.log("Student ID changed, loading favorites for:", newStudentId);
+      loadFavorites();
+    } else if (!newStudentId) {
+      console.log("No student ID, clearing favorites");
+      favorites.value = [];
+      favoritesCount.value = null;
+    } else {
+      console.log("Student ID unchanged, skipping load");
+    }
+  }
+);
 </script>
 
 <style scoped>
@@ -463,6 +617,75 @@ button:disabled {
 .list-end {
   color: #6c757d;
   font-size: 0.9rem;
+}
+
+.events-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.event-item {
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.event-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #212529;
+  flex: 1;
+}
+
+.event-meta {
+  font-size: 0.85rem;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+.event-description {
+  margin: 0.5rem 0;
+  color: #495057;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.event-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #6c757d;
+}
+
+.event-details a {
+  color: #0d6efd;
+  text-decoration: none;
+}
+
+.event-details a:hover {
+  text-decoration: underline;
+}
+
+.placeholder {
+  padding: 2rem;
+  text-align: center;
+  color: #6c757d;
+  font-style: italic;
 }
 </style>
 

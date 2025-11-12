@@ -24,13 +24,21 @@ from scripts.database_mv.manage import (
     SIMILARITY_THRESHOLD,
     EVENTS_INPUT_FILE,
     EVENTS_OUTPUT_FILE,
+    STUDENTS_INPUT_FILE,
+    STUDENTS_OUTPUT_FILE,
     _ensure_event_paths,
+    _ensure_student_paths,
 )
 from scripts.database_mv.helpers.directions_clusters import run_directions_pipeline
 from scripts.database_mv.helpers.preprocess_excel import (
     INPUT_FILE as DIRECTIONS_INPUT_FILE,
     OUTPUT_FILE as DIRECTIONS_OUTPUT_FILE,
     preprocess_excel,
+)
+from scripts.database_mv.helpers.process_students import (
+    process_students_from_excel,
+    load_students_from_json_file,
+    insert_students_to_db,
 )
 
 
@@ -42,6 +50,8 @@ class MaintenanceInfoResponse(BaseModel):
     events_output_file: str
     directions_input_file: str
     directions_output_file: str
+    students_input_file: str
+    students_output_file: str
     cluster_top_k_default: int
     similarity_threshold_default: float
 
@@ -117,6 +127,32 @@ class ResetDatabaseResponse(BaseModel):
     log: str | None = None
 
 
+class StudentsProcessRequest(BaseModel):
+    input_file: str | None = None
+    output_file: str | None = None
+
+
+class StudentsProcessResponse(BaseModel):
+    processed: int
+    input_file: str
+    output_file: str
+    log: str | None = None
+
+
+class StudentsLoadRequest(BaseModel):
+    input_file: str | None = None
+    default_institution: str = "Университет"
+    limit: int | None = Field(None, ge=1, description="Максимальное количество студентов для добавления (None = без ограничений)")
+
+
+class StudentsLoadResponse(BaseModel):
+    added: int
+    skipped: int
+    total_in_file: int
+    output_file: str
+    log: str | None = None
+
+
 class OperationExecutionError(Exception):
     """Wraps errors raised during operation execution together with captured logs."""
 
@@ -155,6 +191,8 @@ def get_maintenance_info() -> MaintenanceInfoResponse:
         events_output_file=str(Path(EVENTS_OUTPUT_FILE)),
         directions_input_file=str(Path(DIRECTIONS_INPUT_FILE)),
         directions_output_file=str(Path(DIRECTIONS_OUTPUT_FILE)),
+        students_input_file=str(Path(STUDENTS_INPUT_FILE)),
+        students_output_file=str(Path(STUDENTS_OUTPUT_FILE)),
         cluster_top_k_default=CLUSTER_TOP_K,
         similarity_threshold_default=SIMILARITY_THRESHOLD,
     )
@@ -449,6 +487,174 @@ def clusterize_directions(request: DirectionsClusterRequest) -> DirectionsCluste
     )
 
     return DirectionsClusterResponse(message=message, log=log or None)
+
+
+@router.post("/students/process-excel", response_model=StudentsProcessResponse)
+async def process_students_excel(request: Request) -> StudentsProcessResponse:
+    """Обрабатывает Excel файл студентов. Можно загрузить файл или указать путь."""
+    _ensure_student_paths()
+    
+    content_type = request.headers.get("content-type", "").lower()
+    file = None
+    input_file = None
+    output_file = None
+    
+    # Парсим запрос в зависимости от content-type
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        if "file" in form:
+            file = form["file"]
+        input_file = form.get("input_file")
+        output_file = form.get("output_file")
+    else:
+        # По умолчанию пытаемся парсить как JSON
+        try:
+            body = await request.json()
+            input_file = body.get("input_file")
+            output_file = body.get("output_file")
+        except Exception:
+            # Если не JSON, используем значения по умолчанию
+            pass
+    
+    # Определяем входной файл
+    if file:
+        # Сохраняем загруженный файл во временную директорию
+        temp_dir = Path(tempfile.gettempdir()) / "vkr_students"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        filename = getattr(file, "filename", "uploaded.xlsx") or "uploaded.xlsx"
+        input_path = temp_dir / filename
+        file_content = await file.read()
+        with input_path.open("wb") as f:
+            f.write(file_content)
+    elif input_file:
+        input_path = Path(input_file)
+    else:
+        input_path = Path(STUDENTS_INPUT_FILE)
+    
+    # Определяем выходной файл
+    if output_file:
+        output_path = Path(output_file)
+    else:
+        output_path = Path(STUDENTS_OUTPUT_FILE)
+    
+    # Создаём директорию для выходного файла
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if not input_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Файл не найден: {input_path}",
+        )
+    
+    try:
+        students, log = _execute_with_logs(process_students_from_excel, input_path, output_path)
+    except OperationExecutionError as exc:
+        raise _http_error_from_exception(exc)
+
+    return StudentsProcessResponse(
+        processed=len(students),
+        input_file=str(input_path),
+        output_file=str(output_path),
+        log=log or None,
+    )
+
+
+@router.post("/students/load-json", response_model=StudentsLoadResponse)
+async def load_students_from_json(request: Request) -> StudentsLoadResponse:
+    """Загружает студентов из JSON в БД. Можно загрузить файл или указать путь."""
+    _ensure_student_paths()
+    
+    content_type = request.headers.get("content-type", "").lower()
+    file = None
+    input_file = None
+    default_institution = "Университет"
+    limit = None
+    
+    # Парсим запрос в зависимости от content-type
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        if "file" in form:
+            file = form["file"]
+        input_file = form.get("input_file")
+        if form.get("default_institution"):
+            default_institution = form.get("default_institution")
+        if form.get("limit"):
+            try:
+                limit = int(form.get("limit"))
+                if limit <= 0:
+                    limit = None
+            except (ValueError, TypeError):
+                limit = None
+    else:
+        # По умолчанию пытаемся парсить как JSON
+        try:
+            body = await request.json()
+            input_file = body.get("input_file")
+            default_institution = body.get("default_institution", "Университет")
+            limit = body.get("limit")
+            if limit is not None:
+                try:
+                    limit = int(limit)
+                    if limit <= 0:
+                        limit = None
+                except (ValueError, TypeError):
+                    limit = None
+        except Exception:
+            # Если не JSON, используем значения по умолчанию
+            pass
+    
+    # Определяем входной файл
+    json_path = None
+    if file:
+        # Сохраняем загруженный файл во временную директорию
+        temp_dir = Path(tempfile.gettempdir()) / "vkr_students"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        filename = getattr(file, "filename", "uploaded.json") or "uploaded.json"
+        json_path = temp_dir / filename
+        file_content = await file.read()
+        with json_path.open("wb") as f:
+            f.write(file_content)
+    elif input_file:
+        json_path = Path(input_file)
+    else:
+        json_path = Path(STUDENTS_OUTPUT_FILE)
+    
+    if not json_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"JSON-файл не найден: {json_path}",
+        )
+
+    try:
+        students, load_log = _execute_with_logs(load_students_from_json_file, json_path)
+    except OperationExecutionError as exc:
+        raise _http_error_from_exception(exc)
+
+    if not students:
+        detail = {"message": "JSON-файл не содержит студентов"}
+        if load_log:
+            detail["log"] = load_log
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+    
+    try:
+        (added, skipped), insert_log = _execute_with_logs(
+            insert_students_to_db,
+            students,
+            default_institution=default_institution,
+            limit=limit,
+        )
+    except OperationExecutionError as exc:
+        raise _http_error_from_exception(exc)
+
+    combined_log = "\n".join(part for part in (load_log, insert_log) if part)
+
+    return StudentsLoadResponse(
+        added=added,
+        skipped=skipped,
+        total_in_file=len(students),
+        output_file=str(json_path),
+        log=combined_log or None,
+    )
 
 
 @router.post("/database/reset", response_model=ResetDatabaseResponse)

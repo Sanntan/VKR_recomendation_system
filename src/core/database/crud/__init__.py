@@ -5,5 +5,6 @@ from .directions import *
 from .events import *
 from .event_clusters import *
 from .feedback import *
+from .favorites import *
 from .recommendations import *
 from .students import *
