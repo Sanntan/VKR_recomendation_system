@@ -1,12 +1,39 @@
+from datetime import datetime, timedelta
+
 from telegram import Update
 from telegram.ext import ContextTypes, CallbackContext
 from functools import wraps
 from typing import Any, Optional
 import logging
-from src.core.database.connection import get_db
-from src.core.database.crud.bot_users import get_bot_user_with_student
+from src.bot.services.api_client import api_client, APIClientError
 
 logger = logging.getLogger(__name__)
+
+BOT_USER_CACHE_TTL = timedelta(seconds=30)
+ACTIVITY_THROTTLE = timedelta(seconds=60)
+
+
+def _get_cached_bot_user(context: ContextTypes.DEFAULT_TYPE, now: datetime) -> Optional[dict]:
+    cache_entry = context.user_data.get('_bot_user_cache')
+    if cache_entry:
+        timestamp = cache_entry.get('timestamp')
+        if isinstance(timestamp, datetime) and now - timestamp < BOT_USER_CACHE_TTL:
+            return cache_entry.get('data')
+    return None
+
+
+def _store_bot_user_cache(context: ContextTypes.DEFAULT_TYPE, bot_user: dict, now: datetime) -> None:
+    context.user_data['_bot_user_cache'] = {'data': bot_user, 'timestamp': now}
+    context.user_data['bot_user'] = bot_user
+    context.user_data['student'] = bot_user.get("student")
+
+
+def _should_ping_activity(context: ContextTypes.DEFAULT_TYPE, now: datetime) -> bool:
+    last_ping = context.user_data.get('_last_activity_ping')
+    if isinstance(last_ping, datetime) and now - last_ping < ACTIVITY_THROTTLE:
+        return False
+    context.user_data['_last_activity_ping'] = now
+    return True
 
 
 # Декораторы для обработчиков
@@ -19,12 +46,24 @@ def auth_required(func):
             return await func(update, context, *args, **kwargs)
 
         user_id = update.effective_user.id
+        now = datetime.utcnow()
 
-        # Проверяем авторизацию пользователя
-        db = get_db()
-        try:
-            bot_user = get_bot_user_with_student(db, user_id)
-            if not bot_user or not bot_user.is_linked:
+        bot_user = _get_cached_bot_user(context, now)
+        if bot_user:
+            context.user_data['bot_user'] = bot_user
+            context.user_data['student'] = bot_user.get("student")
+        else:
+            try:
+                bot_user = await api_client.get_bot_user(user_id)
+            except APIClientError as exc:
+                logger.error("Не удалось получить данные пользователя из API: %s", exc)
+                if update.message:
+                    await update.message.reply_text(
+                        "❌ Внутренняя ошибка сервера. Попробуйте позже."
+                    )
+                return
+
+            if not bot_user or not bot_user.get("is_linked"):
                 if update.message:
                     await update.message.reply_text(
                         "❌ Вы не авторизованы!\n\n"
@@ -32,15 +71,16 @@ def auth_required(func):
                     )
                 return
 
-            # Обновляем время активности
-            from src.core.database.crud.bot_users import update_bot_user_activity
-            update_bot_user_activity(db, user_id)
+            _store_bot_user_cache(context, bot_user, now)
+        if bot_user:
+            context.user_data['bot_user'] = bot_user
+            context.user_data['student'] = bot_user.get("student")
 
-            # Сохраняем информацию о студенте в контексте
-            context.user_data['student'] = bot_user.student
-
-        finally:
-            db.close()
+        if _should_ping_activity(context, now):
+            try:
+                await api_client.update_bot_user_activity(user_id)
+            except APIClientError as exc:
+                logger.warning("Не удалось обновить активность пользователя: %s", exc)
 
         return await func(update, context, *args, **kwargs)
 
@@ -84,30 +124,35 @@ class AuthMiddleware:
 
     async def is_authenticated(self, update: Update, context: CallbackContext) -> bool:
         """Проверяет, авторизован ли пользователь."""
-        from src.core.database.connection import get_db
-        from src.core.database.crud.bot_users import get_bot_user_with_student
-
         if not update.effective_user:
             return False
 
         user_id = update.effective_user.id
 
-        db = get_db()
-        try:
-            bot_user = get_bot_user_with_student(db, user_id)
-            if not bot_user or not bot_user.is_linked:
+        now = datetime.utcnow()
+        bot_user = _get_cached_bot_user(context, now)
+        if bot_user:
+            context.user_data['bot_user'] = bot_user
+            context.user_data['student'] = bot_user.get("student")
+        else:
+            try:
+                bot_user = await api_client.get_bot_user(user_id)
+            except APIClientError as exc:
+                logger.error("Ошибка при проверке авторизации: %s", exc)
                 return False
 
-            # Обновляем время активности
-            from src.core.database.crud.bot_users import update_bot_user_activity
-            update_bot_user_activity(db, user_id)
+            if not bot_user or not bot_user.get("is_linked"):
+                return False
 
-            # Сохраняем информацию о студенте в контексте
-            context.user_data['student'] = bot_user.student
-            return True
+            _store_bot_user_cache(context, bot_user, now)
+        if bot_user:
+            context.user_data['bot_user'] = bot_user
+            context.user_data['student'] = bot_user.get("student")
 
-        except Exception as e:
-            logger.error(f"Ошибка при проверке авторизации: {e}")
-            return False
-        finally:
-            db.close()
+        if _should_ping_activity(context, now):
+            try:
+                await api_client.update_bot_user_activity(user_id)
+            except APIClientError as exc:
+                logger.warning("Не удалось обновить активность пользователя: %s", exc)
+
+        return True

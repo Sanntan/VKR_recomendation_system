@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -18,7 +19,7 @@ from src.recommendation.events.utils import (
     load_events_from_json_file,
     process_events_from_csv,
 )
-from src.recommendation.events.score_calculation import recalculate_scores_for_all_students
+import requests
 
 from scripts.database_mv.helpers.directions_clusters import run_directions_pipeline
 from scripts.database_mv.helpers.preprocess_excel import (
@@ -40,6 +41,7 @@ EVENTS_OUTPUT_FILE = EVENTS_RESULTS_DIR / "events_processed.json"
 
 CLUSTER_TOP_K = 3
 SIMILARITY_THRESHOLD = 0.35
+INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", "http://localhost:8000")
 
 
 def _ensure_event_paths() -> None:
@@ -121,18 +123,21 @@ def run_events_menu() -> None:
         elif choice == 4:
             print("\n🚀 ПЕРЕСЧЕТ SCORES МЕЖДУ СТУДЕНТАМИ И МЕРОПРИЯТИЯМИ")
             try:
-                from src.core.database.connection import get_db
-                db = get_db()
-                try:
-                    stats = recalculate_scores_for_all_students(db, min_score=0.0)
-                    print(f"\n✅ Пересчет завершен успешно!")
-                    print(f"   📊 Статистика:")
-                    print(f"      - Рассчитано пар: {stats['total_calculated']}")
-                    print(f"      - Сохранено рекомендаций: {stats['total_saved']}")
-                    print(f"      - Обработано студентов: {stats['students_processed']}")
-                    print(f"      - Обработано мероприятий: {stats['events_processed']}")
-                finally:
-                    db.close()
+                response = requests.post(
+                    f"{INTERNAL_API_URL.rstrip('/')}/recommendations/recalculate",
+                    json={"min_score": 0.0},
+                    timeout=120,
+                )
+                response.raise_for_status()
+                stats = response.json()
+                print("\n✅ Пересчет завершен успешно!")
+                print("   📊 Статистика:")
+                print(f"      - Рассчитано пар: {stats.get('total_calculated')}")
+                print(f"      - Сохранено рекомендаций: {stats.get('total_saved')}")
+                print(f"      - Обработано студентов: {stats.get('students_processed')}")
+                print(f"      - Обработано мероприятий: {stats.get('events_processed')}")
+            except requests.HTTPError as exc:
+                print(f"💥 Ошибка пересчета scores: {exc.response.text}")
             except Exception as exc:  # noqa: BLE001
                 print(f"💥 Ошибка пересчета scores: {exc}")
 
