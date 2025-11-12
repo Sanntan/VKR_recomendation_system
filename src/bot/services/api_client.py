@@ -109,6 +109,26 @@ class APIClient:
         payload = {"student_id": str(student_id), "rating": rating, "comment": comment}
         return await self._request("POST", "/feedback", json=payload)
 
+    async def add_favorite(self, student_id: UUID, event_id: UUID) -> Dict[str, Any]:
+        return await self._request("POST", f"/favorites/{student_id}/{event_id}")
+
+    async def remove_favorite(self, student_id: UUID, event_id: UUID) -> None:
+        await self._request("DELETE", f"/favorites/{student_id}/{event_id}")
+
+    async def get_favorites(self, student_id: UUID, limit: int = 100) -> List[Dict[str, Any]]:
+        result = await self._request("GET", f"/favorites/by-student/{student_id}?limit={limit}")
+        if result is None:
+            return []
+        return result
+
+    async def check_favorite(self, student_id: UUID, event_id: UUID) -> bool:
+        result = await self._request("GET", f"/favorites/{student_id}/{event_id}/check")
+        return result.get("is_favorite", False) if result else False
+
+    async def get_favorites_count(self, student_id: UUID) -> int:
+        result = await self._request("GET", f"/favorites/by-student/{student_id}/count")
+        return result.get("count", 0) if result else 0
+
 
 api_client = APIClient(base_url=settings.internal_api_url)
 

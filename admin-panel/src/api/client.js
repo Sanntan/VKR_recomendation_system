@@ -64,6 +64,48 @@ export async function recalculateRecommendationsForStudent(studentId, { minScore
   return response.data;
 }
 
+export async function fetchFavoritesByStudent(studentId, { limit = 100 } = {}) {
+  const url = `/favorites/by-student/${encodeURIComponent(studentId)}`;
+  console.log("API: fetchFavoritesByStudent - URL:", url, "limit:", limit);
+  try {
+    const response = await api.get(url, {
+      params: { limit }
+    });
+    console.log("API: fetchFavoritesByStudent - Response:", response);
+    return response.data;
+  } catch (error) {
+    console.error("API: fetchFavoritesByStudent - Error:", error);
+    throw error;
+  }
+}
+
+export async function getFavoritesCount(studentId) {
+  const url = `/favorites/by-student/${encodeURIComponent(studentId)}/count`;
+  console.log("API: getFavoritesCount - URL:", url);
+  try {
+    const response = await api.get(url);
+    console.log("API: getFavoritesCount - Response:", response);
+    return response.data;
+  } catch (error) {
+    console.error("API: getFavoritesCount - Error:", error);
+    throw error;
+  }
+}
+
+export async function addFavorite(studentId, eventId) {
+  const response = await api.post(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}`);
+  return response.data;
+}
+
+export async function removeFavorite(studentId, eventId) {
+  await api.delete(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}`);
+}
+
+export async function checkFavorite(studentId, eventId) {
+  const response = await api.get(`/favorites/${encodeURIComponent(studentId)}/${encodeURIComponent(eventId)}/check`);
+  return response.data;
+}
+
 export async function recalculateRecommendationsGlobal({ minScore = 0, batchSize = 1000 } = {}) {
   const response = await maintenanceApi.post("/maintenance/recommendations/recalculate", {
     min_score: minScore,

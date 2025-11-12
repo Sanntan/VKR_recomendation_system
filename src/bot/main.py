@@ -12,6 +12,9 @@ from src.bot.handlers.main_menu import main_menu_handler, show_main_menu, back_t
 from src.bot.handlers.recommendations import show_recommendations, handle_recommendation_feedback, \
     show_next_recommendation, export_recommendations
 from src.bot.handlers.search import show_search_filters, handle_search_filter, show_next_search_result
+from src.bot.handlers.favorites import (
+    show_personal_cabinet, show_favorites, handle_favorite_action, show_next_favorite
+)
 from src.bot.handlers.feedback import (
     request_feedback, handle_rating_selection, add_comment, send_feedback,
     receive_comment, cancel_feedback, WAITING_FEEDBACK_RATING, WAITING_FEEDBACK_COMMENT
@@ -82,6 +85,7 @@ def build_application(
     application.add_handler(CallbackQueryHandler(show_recommendations, pattern="^my_recommendations$"))
     application.add_handler(CallbackQueryHandler(export_recommendations, pattern="^export_recommendations$"))
     application.add_handler(CallbackQueryHandler(show_search_filters, pattern="^event_search$"))
+    application.add_handler(CallbackQueryHandler(show_personal_cabinet, pattern="^personal_cabinet$"))
 
     # Обработчики для рекомендаций
     application.add_handler(CallbackQueryHandler(handle_recommendation_feedback, pattern="^(like|dislike)_"))
@@ -90,6 +94,11 @@ def build_application(
     # Обработчики для поиска
     application.add_handler(CallbackQueryHandler(handle_search_filter, pattern="^filter_"))
     application.add_handler(CallbackQueryHandler(show_next_search_result, pattern="^search_next$"))
+
+    # Обработчики для избранного
+    application.add_handler(CallbackQueryHandler(show_favorites, pattern="^my_favorites$"))
+    application.add_handler(CallbackQueryHandler(handle_favorite_action, pattern="^(add_favorite|remove_favorite)_"))
+    application.add_handler(CallbackQueryHandler(show_next_favorite, pattern="^favorite_next$"))
 
     # Обработчик для ввода participant_id (ожидаем его после команды /start)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_participant_id_input))

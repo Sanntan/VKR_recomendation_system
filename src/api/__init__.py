@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
-from .routes import bot_users, students, events, recommendations, feedback, maintenance
+from .routes import bot_users, students, events, recommendations, feedback, favorites, maintenance
 
 
 def create_app() -> FastAPI:
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/events", tags=["events"])
     app.include_router(recommendations.router, prefix="/recommendations", tags=["recommendations"])
     app.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+    app.include_router(favorites.router, prefix="/favorites", tags=["favorites"])
     app.include_router(maintenance.router, prefix="/maintenance", tags=["maintenance"])
 
     @app.get("/health", tags=["service"])
