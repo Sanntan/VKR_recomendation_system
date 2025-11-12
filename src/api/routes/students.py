@@ -1,11 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.dependencies import db_dependency
-from src.api.schemas import StudentSchema, DirectionSchema
+from src.api.schemas import StudentSchema, DirectionSchema, StudentListResponse
 from src.core.database.models import Students, Directions
 
 
@@ -60,4 +60,27 @@ def get_student(student_id: UUID, db: Session = Depends(db_dependency)) -> Stude
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     return _build_student(student)
+
+
+@router.get("", response_model=StudentListResponse)
+def list_students(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(db_dependency),
+) -> StudentListResponse:
+    total = db.execute(select(func.count()).select_from(Students)).scalar_one()
+    stmt = (
+        select(Students)
+        .options(selectinload(Students.direction))
+        .order_by(Students.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    students = db.execute(stmt).scalars().all()
+    return StudentListResponse(
+        students=[_build_student(student) for student in students],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 

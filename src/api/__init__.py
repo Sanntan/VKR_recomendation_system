@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from src.core.config import settings
 from .routes import bot_users, students, events, recommendations, feedback
 
 
@@ -8,6 +10,14 @@ def create_app() -> FastAPI:
         title="Internal VKR API",
         description="Внутреннее API для бота, админ-панели и фоновых сервисов",
         version="1.0.0",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.admin_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(bot_users.router, prefix="/bot", tags=["bot"])
