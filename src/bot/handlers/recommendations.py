@@ -3,6 +3,11 @@ from telegram.ext import ContextTypes
 from datetime import datetime, date
 from uuid import UUID
 from typing import Any, Mapping, Dict
+import io
+
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from src.bot.services.api_client import api_client, APIClientError
 from src.bot.middlewares.auth_middleware import auth_required
@@ -257,3 +262,257 @@ async def show_next_recommendation(update: Update, context: ContextTypes.DEFAULT
         parse_mode='Markdown',
         disable_web_page_preview=True
     )
+
+
+def create_recommendations_docx(recommendations: list[Dict[str, Any]], events: Dict[str, Dict[str, Any]]) -> io.BytesIO:
+    """Создает DOCX файл с рекомендациями, отсортированными по score (от самых близких)."""
+    doc = Document()
+    
+    # Заголовок документа
+    title = doc.add_heading('Мои рекомендации', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Добавляем дату создания
+    date_para = doc.add_paragraph(f'Дата создания: {datetime.now().strftime("%d.%m.%Y %H:%M")}')
+    date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    date_para_format = date_para.runs[0].font
+    date_para_format.size = Pt(10)
+    date_para_format.italic = True
+    
+    doc.add_paragraph()  # Пустая строка
+    
+    # Сортируем рекомендации по score (от большего к меньшему)
+    sorted_recommendations = sorted(
+        recommendations,
+        key=lambda x: x.get("score", 0.0),
+        reverse=True
+    )
+    
+    if not sorted_recommendations:
+        doc.add_paragraph("Пока нет рекомендаций.")
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+        return doc_buffer
+    
+    # Добавляем каждую рекомендацию
+    for idx, rec in enumerate(sorted_recommendations, 1):
+        event_id = str(rec.get("event_id", ""))
+        event = events.get(event_id)
+        
+        if not event:
+            continue
+        
+        # Заголовок мероприятия
+        event_title = doc.add_heading(f'{idx}. {event.get("title", "Без названия")}', level=1)
+        event_title_format = event_title.runs[0].font
+        event_title_format.size = Pt(14)
+        event_title_format.bold = True
+        
+        # Описание
+        if event.get("short_description"):
+            desc_para = doc.add_paragraph(event["short_description"])
+            desc_format = desc_para.runs[0].font
+            desc_format.size = Pt(11)
+        
+        # Полное описание, если есть
+        if event.get("description"):
+            full_desc_para = doc.add_paragraph(event["description"])
+            full_desc_format = full_desc_para.runs[0].font
+            full_desc_format.size = Pt(10)
+            full_desc_format.italic = True
+        
+        # Информация о мероприятии
+        info_para = doc.add_paragraph()
+        
+        # Дата
+        start_raw = event.get("start_date")
+        end_raw = event.get("end_date")
+        start_date = _parse_date(start_raw)
+        end_date = _parse_date(end_raw)
+        
+        if start_date:
+            start_str = start_date.strftime('%d.%m.%Y')
+            end_str = end_date.strftime('%d.%m.%Y') if end_date else ''
+            date_str = start_str
+            if end_str and start_str != end_str:
+                date_str = f"{start_str} - {end_str}"
+            info_para.add_run("📅 Дата: ").bold = True
+            info_para.add_run(date_str)
+            info_para.add_run("\n")
+        
+        # Формат
+        if event.get("format"):
+            info_para.add_run("🎯 Формат: ").bold = True
+            info_para.add_run(event["format"])
+            info_para.add_run("\n")
+        
+        # Ссылка
+        if event.get("link"):
+            info_para.add_run("🔗 Ссылка: ").bold = True
+            info_para.add_run(event["link"])
+            info_para.add_run("\n")
+        
+        # Оценка релевантности
+        score = rec.get("score")
+        if score is not None:
+            info_para.add_run("⭐ Оценка релевантности: ").bold = True
+            info_para.add_run(f"{score:.2f}")
+            info_para.add_run("\n")
+        
+        # Лайки/дизлайки
+        likes = event.get("likes_count", 0)
+        dislikes = event.get("dislikes_count", 0)
+        info_para.add_run(f"👍 {likes}  👎 {dislikes}")
+        
+        # Разделитель между мероприятиями
+        if idx < len(sorted_recommendations):
+            doc.add_paragraph("─" * 50)
+            doc.add_paragraph()
+    
+    # Сохраняем документ в BytesIO
+    doc_buffer = io.BytesIO()
+    doc.save(doc_buffer)
+    doc_buffer.seek(0)
+    return doc_buffer
+
+
+@auth_required
+async def export_recommendations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Выгружает все рекомендации пользователя в DOCX файл."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+    
+    student = context.user_data.get('student')
+    if not student:
+        error_text = "❌ Ошибка: пользователь не найден. Попробуйте авторизоваться заново."
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    student_id = student.get("id")
+    if not student_id:
+        error_text = "❌ Ошибка: не найден идентификатор студента."
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    try:
+        student_uuid = UUID(student_id)
+    except (ValueError, TypeError):
+        error_text = "Ошибка идентификации студента. Попробуйте авторизоваться заново."
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    # Показываем сообщение о начале генерации
+    loading_text = "⏳ Формирую файл с рекомендациями..."
+    if query:
+        await query.edit_message_text(loading_text)
+    else:
+        loading_msg = await update.message.reply_text(loading_text)
+    
+    try:
+        # Получаем все рекомендации (большой лимит)
+        recommendations = await api_client.get_recommendations(student_uuid, limit=1000)
+    except APIClientError:
+        error_text = "Не удалось загрузить рекомендации. Попробуйте позже."
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    if not recommendations:
+        error_text = (
+            "Пока нет подходящих мероприятий для рекомендаций.\n"
+            "Попробуйте воспользоваться поиском мероприятий!"
+        )
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    # Получаем информацию о событиях
+    event_ids = [rec.get("event_id") for rec in recommendations if rec.get("event_id")]
+    events: Dict[str, Dict[str, Any]] = {}
+    
+    if event_ids:
+        try:
+            bulk_response = await api_client.get_events_bulk(event_ids)
+            for event in bulk_response.get("events", []):
+                events[str(event["id"])] = event
+        except APIClientError:
+            # Если bulk не сработал, получаем по одному
+            for event_id in event_ids:
+                try:
+                    event = await api_client.get_event(UUID(event_id))
+                    if event:
+                        events[str(event["id"])] = event
+                except APIClientError:
+                    continue
+    
+    # Создаем DOCX файл
+    try:
+        docx_buffer = create_recommendations_docx(recommendations, events)
+    except Exception as e:
+        error_text = f"Ошибка при создании файла: {str(e)}"
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return
+    
+    # Отправляем файл
+    filename = f"recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    
+    try:
+        if query:
+            await query.message.reply_document(
+                document=docx_buffer,
+                filename=filename,
+                caption=f"📄 Ваши рекомендации ({len(recommendations)} мероприятий)"
+            )
+            await query.delete()
+        else:
+            await update.message.reply_document(
+                document=docx_buffer,
+                filename=filename,
+                caption=f"📄 Ваши рекомендации ({len(recommendations)} мероприятий)"
+            )
+    except Exception as e:
+        error_text = f"Ошибка при отправке файла: {str(e)}"
+        if query:
+            await query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+        else:
+            await update.message.reply_text(error_text)
+        return

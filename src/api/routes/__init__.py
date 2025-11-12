@@ -1,4 +1,4 @@
-from . import bot_users, students, events, recommendations, feedback
+from . import bot_users, students, events, recommendations, feedback, maintenance
 
 __all__ = [
     "bot_users",
@@ -6,5 +6,6 @@ __all__ = [
     "events",
     "recommendations",
     "feedback",
+    "maintenance",
 ]
 
