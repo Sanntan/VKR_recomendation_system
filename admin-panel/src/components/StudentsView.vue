@@ -227,9 +227,9 @@ onMounted(() => {
   gap: 1.5rem;
   padding: 1.75rem;
   background-color: #ffffff;
-  border-radius: 1.25rem;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 12px 24px -12px rgba(15, 23, 42, 0.15);
+  border-radius: 12px;
+  border: 1px solid #dee2e6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .card-header h2 {
@@ -239,7 +239,7 @@ onMounted(() => {
 
 .card-header p {
   margin: 0;
-  color: #6b7280;
+  color: #6c757d;
   font-size: 0.95rem;
 }
 
@@ -248,10 +248,10 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 1rem;
   align-items: flex-end;
-  background-color: #f9fafb;
+  background-color: #f8f9fa;
   padding: 1rem;
-  border-radius: 1rem;
-  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
 }
 
 .field {
@@ -263,43 +263,54 @@ onMounted(() => {
 
 .field span {
   font-weight: 600;
-  color: #4b5563;
+  color: #495057;
   font-size: 0.9rem;
 }
 
 input {
   padding: 0.65rem 0.85rem;
-  border-radius: 0.75rem;
-  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  border: 1px solid #ced4da;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   font-size: 1rem;
+  background-color: #ffffff;
+  color: #212529;
 }
 
 input:focus {
   outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.1);
+}
+
+input::placeholder {
+  color: #adb5bd;
 }
 
 button {
   padding: 0.75rem 1.5rem;
-  border-radius: 0.75rem;
+  border-radius: 8px;
   border: none;
-  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  background: #0d6efd;
   color: #ffffff;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 button.secondary {
-  background: #eef2ff;
-  color: #312e81;
+  background: #6c757d;
+  color: #ffffff;
 }
 
 button:hover:not(:disabled) {
+  background: #0b5ed7;
   transform: translateY(-1px);
-  box-shadow: 0 8px 16px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 4px 12px rgba(13, 110, 253, 0.25);
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #5c636a;
 }
 
 button:disabled {
@@ -314,9 +325,9 @@ button:disabled {
 }
 
 .alert.error {
-  background-color: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+  background-color: #f8d7da;
+  border: 1px solid #f5c2c7;
+  color: #842029;
 }
 
 .student-card {
@@ -324,9 +335,9 @@ button:disabled {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1rem;
   padding: 1.25rem;
-  background-color: #f5f3ff;
-  border-radius: 1rem;
-  border: 1px solid #ddd6fe;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
 }
 
 .info-row {
@@ -335,15 +346,15 @@ button:disabled {
   gap: 0.35rem;
   padding: 0.75rem;
   background-color: #ffffff;
-  border-radius: 0.85rem;
-  border: 1px solid #ede9fe;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
 }
 
 .label {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: #6b21a8;
+  color: #495057;
   font-weight: 600;
 }
 
@@ -367,7 +378,7 @@ button:disabled {
 
 .list-header p {
   margin: 0.25rem 0 0;
-  color: #6b7280;
+  color: #6c757d;
   font-size: 0.9rem;
 }
 
@@ -382,14 +393,16 @@ button:disabled {
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.85rem;
-  color: #4b5563;
+  color: #495057;
 }
 
 .list-controls input {
   width: 90px;
   padding: 0.4rem 0.6rem;
-  border-radius: 0.6rem;
-  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  border: 1px solid #ced4da;
+  background-color: #ffffff;
+  color: #212529;
 }
 
 .students-list {
@@ -402,39 +415,41 @@ button:disabled {
 }
 
 .students-list li {
-  border: 1px solid #e5e7eb;
-  border-radius: 0.85rem;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
   padding: 0.9rem;
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   background-color: #ffffff;
 }
 
 .students-list li:hover {
-  border-color: #a5b4fc;
-  box-shadow: 0 6px 12px rgba(99, 102, 241, 0.15);
+  border-color: #0d6efd;
+  background-color: #f8f9fa;
+  box-shadow: 0 2px 8px rgba(13, 110, 253, 0.1);
 }
 
 .students-list li.active {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+  border-color: #0d6efd;
+  background-color: #e7f1ff;
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
 }
 
 .primary {
   font-weight: 600;
-  color: #111827;
+  color: #212529;
 }
 
 .secondary {
   font-size: 0.9rem;
-  color: #4b5563;
+  color: #495057;
   margin-top: 0.25rem;
 }
 
 .meta {
   margin-top: 0.4rem;
   font-size: 0.75rem;
-  color: #6b7280;
+  color: #6c757d;
 }
 
 .list-actions {
@@ -446,7 +461,7 @@ button:disabled {
 
 .list-loader,
 .list-end {
-  color: #6b7280;
+  color: #6c757d;
   font-size: 0.9rem;
 }
 </style>

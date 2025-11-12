@@ -120,9 +120,9 @@ onMounted(() => {
   gap: 1.5rem;
   padding: 1.75rem;
   background-color: #ffffff;
-  border-radius: 1.25rem;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 12px 24px -12px rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  border: 1px solid #dee2e6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .card-header {
@@ -138,7 +138,7 @@ onMounted(() => {
 
 .card-header p {
   margin: 0;
-  color: #6b7280;
+  color: #6c757d;
 }
 
 .controls {
@@ -152,24 +152,33 @@ onMounted(() => {
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.85rem;
-  color: #4b5563;
+  color: #495057;
 }
 
 .controls input {
   width: 80px;
   padding: 0.4rem 0.5rem;
-  border-radius: 0.6rem;
-  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  border: 1px solid #ced4da;
+  background-color: #ffffff;
+  color: #212529;
 }
 
 button {
   padding: 0.6rem 1.25rem;
-  border-radius: 0.75rem;
+  border-radius: 8px;
   border: none;
-  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  background: #0d6efd;
   color: #ffffff;
   font-weight: 600;
   cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+button:hover:not(:disabled) {
+  background: #0b5ed7;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(13, 110, 253, 0.25);
 }
 
 .alert {
@@ -178,26 +187,26 @@ button {
 }
 
 .alert.error {
-  background-color: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+  background-color: #f8d7da;
+  border: 1px solid #f5c2c7;
+  color: #842029;
 }
 
 .summary {
   margin: 0;
-  color: #4b5563;
+  color: #495057;
 }
 
 .loader {
   text-align: center;
   padding: 1.5rem;
-  color: #4b5563;
+  color: #495057;
 }
 
 .table-wrapper {
   overflow-x: auto;
-  border-radius: 0.75rem;
-  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
 }
 
 table {
@@ -210,29 +219,29 @@ th,
 td {
   padding: 0.9rem 1rem;
   text-align: left;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #dee2e6;
   vertical-align: top;
 }
 
 th {
-  background-color: #f9fafb;
+  background-color: #f8f9fa;
   font-weight: 600;
-  color: #4b5563;
+  color: #212529;
 }
 
 tbody tr:hover {
-  background-color: #f4f4ff;
+  background-color: #f8f9fa;
 }
 
 .title {
   font-weight: 600;
-  color: #111827;
+  color: #212529;
 }
 
 .description {
   margin-top: 0.3rem;
   font-size: 0.85rem;
-  color: #6b7280;
+  color: #6c757d;
 }
 
 .status-tag {
@@ -244,13 +253,13 @@ tbody tr:hover {
 }
 
 .status-tag.active {
-  background-color: #dcfce7;
-  color: #166534;
+  background-color: #d1e7dd;
+  color: #0f5132;
 }
 
 .status-tag.inactive {
-  background-color: #fee2e2;
-  color: #b91c1c;
+  background-color: #f8d7da;
+  color: #842029;
 }
 </style>
 

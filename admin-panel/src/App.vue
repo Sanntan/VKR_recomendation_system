@@ -74,7 +74,8 @@ const activeComponent = computed(() => viewComponents[currentView.value]);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  color: #111827;
+  color: #212529;
+  background-color: #f8f9fa;
 }
 
 .app-header {
@@ -82,20 +83,23 @@ const activeComponent = computed(() => viewComponents[currentView.value]);
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem 2rem;
-  background: linear-gradient(90deg, #3730a3, #4f46e5);
-  color: #ffffff;
-  box-shadow: 0 4px 16px rgba(79, 70, 229, 0.3);
+  background: #ffffff;
+  border-bottom: 1px solid #dee2e6;
+  color: #212529;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .branding h1 {
   margin: 0 0 0.25rem 0;
   font-size: 1.75rem;
+  color: #212529;
+  font-weight: 700;
 }
 
 .branding p {
   margin: 0;
   font-size: 0.95rem;
-  opacity: 0.85;
+  color: #6c757d;
 }
 
 .app-body {
@@ -107,7 +111,7 @@ const activeComponent = computed(() => viewComponents[currentView.value]);
 
 .sidebar {
   background-color: #ffffff;
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid #dee2e6;
   padding: 1.5rem 1rem;
 }
 
@@ -119,17 +123,22 @@ const activeComponent = computed(() => viewComponents[currentView.value]);
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid transparent;
-  border-radius: 0.75rem;
+  border-radius: 8px;
   background-color: transparent;
   transition: all 0.2s ease-in-out;
-  color: inherit;
+  color: #212529;
+  margin-bottom: 0.5rem;
 }
 
-.nav-item:hover,
+.nav-item:hover {
+  background-color: #f8f9fa;
+  border-color: #dee2e6;
+}
+
 .nav-item.active {
-  background-color: #eef2ff;
-  border-color: #c7d2fe;
-  color: #312e81;
+  background-color: #0d6efd;
+  border-color: #0d6efd;
+  color: #ffffff;
 }
 
 .nav-title {
@@ -138,7 +147,11 @@ const activeComponent = computed(() => viewComponents[currentView.value]);
 
 .nav-description {
   font-size: 0.85rem;
-  color: #6b7280;
+  color: #6c757d;
+}
+
+.nav-item.active .nav-description {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .content {

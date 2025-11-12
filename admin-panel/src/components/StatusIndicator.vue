@@ -58,28 +58,27 @@ onMounted(() => {
   align-items: center;
   gap: 1rem;
   padding: 0.75rem 1.25rem;
-  border-radius: 0.75rem;
-  background-color: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(8px);
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  color: #212529;
+  border: 1px solid #dee2e6;
 }
 
 .status-card.healthy .status-dot {
-  background-color: #4ade80;
-  box-shadow: 0 0 12px rgba(74, 222, 128, 0.6);
+  background-color: #198754;
+  box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.2);
 }
 
 .status-card.unhealthy .status-dot {
-  background-color: #f87171;
-  box-shadow: 0 0 12px rgba(248, 113, 113, 0.6);
+  background-color: #dc3545;
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.2);
 }
 
 .status-dot {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background-color: #facc15;
+  background-color: #ffc107;
   transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
 
@@ -101,16 +100,19 @@ onMounted(() => {
 .refresh {
   margin-left: auto;
   padding: 0.35rem 0.85rem;
-  border-radius: 0.5rem;
-  border: none;
+  border-radius: 6px;
+  border: 1px solid #dee2e6;
   cursor: pointer;
-  background-color: rgba(255, 255, 255, 0.15);
-  color: inherit;
-  transition: background-color 0.2s ease, transform 0.2s ease;
+  background-color: #ffffff;
+  color: #212529;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
 .refresh:hover:not(:disabled) {
-  background-color: rgba(255, 255, 255, 0.35);
+  background-color: #f8f9fa;
+  border-color: #adb5bd;
   transform: translateY(-1px);
 }
 
