@@ -23,6 +23,13 @@ class StudentSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StudentListResponse(BaseModel):
+    students: Sequence[StudentSchema]
+    total: int
+    limit: int
+    offset: int
+
+
 class BotUserSchema(BaseModel):
     telegram_id: int
     username: Optional[str]

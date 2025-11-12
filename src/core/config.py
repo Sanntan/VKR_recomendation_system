@@ -1,11 +1,12 @@
 from pydantic_settings import BaseSettings
 import os
-from typing import Optional
+from typing import Optional, List
 
 class Settings(BaseSettings):
     bot_token: Optional[str] = None
     database_url: str = "sqlite+aiosqlite:///./test.db"
     internal_api_url: str = "http://localhost:8000"
+    admin_cors_origins: List[str] = ["http://localhost:5173"]
     log_level: str = "INFO"
 
     class Config:
