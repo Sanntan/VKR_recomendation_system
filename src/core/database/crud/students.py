@@ -3,6 +3,7 @@ from sqlalchemy import select, update, delete
 from src.core.database.models import Students
 from uuid import UUID
 from typing import Optional, Dict
+import numpy as np
 
 def create_student(
     db: Session,
@@ -168,7 +169,18 @@ def get_student_by_id(db: Session, student_id: UUID) -> Optional[Students]:
     """
     return db.get(Students, student_id)
 
+
 def delete_student(db: Session, student_id: UUID):
+    """
+    Удаляет студента по ID.
+
+    Args:
+        db: Сессия базы данных
+        student_id: ID студента
+
+    Returns:
+        True если удаление успешно
+    """
     db.execute(delete(Students).where(Students.id == student_id))
     db.commit()
     return True

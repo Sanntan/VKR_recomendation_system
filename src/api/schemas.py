@@ -149,3 +149,4 @@ class StudentProfileUpdateSchema(BaseModel):
                     f"Т-балл для '{competency_name}' должен быть в диапазоне 200-800, получено: {t_score}"
                 )
         return v
+
