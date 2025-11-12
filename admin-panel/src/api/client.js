@@ -237,3 +237,60 @@ export async function maintenanceResetDatabase({ confirm }) {
   return response.data;
 }
 
+export async function maintenanceProcessStudentsExcel({ file, inputFile, outputFile } = {}) {
+  if (file) {
+    // Если есть файл, используем multipart/form-data
+    const formData = new FormData();
+    formData.append("file", file);
+    if (inputFile) {
+      formData.append("input_file", inputFile);
+    }
+    if (outputFile) {
+      formData.append("output_file", outputFile);
+    }
+    const response = await maintenanceApi.post("/maintenance/students/process-excel", formData, {
+      headers: { "Content-Type": "multipart/form-data" }
+    });
+    return response.data;
+  } else {
+    // Если файла нет, используем JSON
+    const response = await maintenanceApi.post("/maintenance/students/process-excel", {
+      input_file: inputFile || null,
+      output_file: outputFile || null
+    });
+    return response.data;
+  }
+}
+
+export async function maintenanceLoadStudentsFromJson({
+  file,
+  inputFile,
+  defaultInstitution = "Университет",
+  limit
+} = {}) {
+  if (file) {
+    // Если есть файл, используем multipart/form-data
+    const formData = new FormData();
+    formData.append("file", file);
+    if (inputFile) {
+      formData.append("input_file", inputFile);
+    }
+    formData.append("default_institution", defaultInstitution);
+    if (limit != null && limit > 0) {
+      formData.append("limit", limit.toString());
+    }
+    const response = await maintenanceApi.post("/maintenance/students/load-json", formData, {
+      headers: { "Content-Type": "multipart/form-data" }
+    });
+    return response.data;
+  } else {
+    // Если файла нет, используем JSON
+    const response = await maintenanceApi.post("/maintenance/students/load-json", {
+      input_file: inputFile || null,
+      default_institution: defaultInstitution,
+      limit: limit && limit > 0 ? limit : null
+    });
+    return response.data;
+  }
+}
+

@@ -27,6 +27,11 @@ from scripts.database_mv.helpers.preprocess_excel import (
     OUTPUT_FILE as DIRECTIONS_OUTPUT_FILE,
     preprocess_excel,
 )
+from scripts.database_mv.helpers.process_students import (
+    process_students_from_excel,
+    load_students_from_json_file,
+    insert_students_to_db,
+)
 
 # Base directories
 BASE_DIR = CURRENT_FILE.parent
@@ -39,6 +44,12 @@ EVENTS_RESULTS_DIR = RESULTS_DIR / "events"
 EVENTS_INPUT_FILE = EVENTS_SOURCES_DIR / "events.csv"
 EVENTS_OUTPUT_FILE = EVENTS_RESULTS_DIR / "events_processed.json"
 
+STUDENTS_SOURCES_DIR = SOURCES_DIR / "students"
+STUDENTS_RESULTS_DIR = RESULTS_DIR / "students"
+
+STUDENTS_INPUT_FILE = STUDENTS_SOURCES_DIR / "123.xlsx"
+STUDENTS_OUTPUT_FILE = STUDENTS_RESULTS_DIR / "students_profiles.json"
+
 CLUSTER_TOP_K = 3
 SIMILARITY_THRESHOLD = 0.35
 INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", "http://localhost:8000")
@@ -47,6 +58,11 @@ INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", "http://localhost:8000")
 def _ensure_event_paths() -> None:
     EVENTS_SOURCES_DIR.mkdir(parents=True, exist_ok=True)
     EVENTS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_student_paths() -> None:
+    STUDENTS_SOURCES_DIR.mkdir(parents=True, exist_ok=True)
+    STUDENTS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _prompt_choice(prompt: str, valid: set[int]) -> int:
@@ -183,16 +199,82 @@ def run_directions_menu() -> None:
                 print(f"💥 Ошибка кластеризации: {exc}")
 
 
+def run_students_menu() -> None:
+    _ensure_student_paths()
+
+    while True:
+        print("\n" + "=" * 50)
+        print("👥 ОБРАБОТКА СТУДЕНТОВ")
+        print("=" * 50)
+        print("📂 Excel ожидается в:", STUDENTS_INPUT_FILE)
+        print("💾 JSON сохраняется в:", STUDENTS_OUTPUT_FILE)
+        print("1 - Обработать Excel и сохранить JSON")
+        print("2 - Загрузить студентов из JSON в БД")
+        print("3 - Обработать Excel и загрузить в БД")
+        print("0 - Назад")
+        print("=" * 50)
+
+        choice = _prompt_choice("Выберите режим: ", {0, 1, 2, 3})
+
+        if choice == 0:
+            return
+
+        if choice == 1:
+            print("\n🚀 ОБРАБОТКА EXCEL -> JSON")
+            try:
+                students = process_students_from_excel(STUDENTS_INPUT_FILE, STUDENTS_OUTPUT_FILE)
+                print(f"\n✅ Обработка завершена. Получено {len(students)} студентов.")
+            except FileNotFoundError as exc:
+                print(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                print(f"💥 Ошибка обработки: {exc}")
+
+        elif choice == 2:
+            print("\n🚀 ЗАГРУЗКА СТУДЕНТОВ ИЗ JSON")
+            students = load_students_from_json_file(STUDENTS_OUTPUT_FILE)
+            if not students:
+                continue
+
+            try:
+                added, skipped = insert_students_to_db(students)
+                print("\n✅ Загрузка завершена!")
+                print(f"   📥 Вставлено: {added}")
+                print(f"   ⏭️  Пропущено: {skipped}")
+                print(f"   📝 Всего в JSON: {len(students)}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"💥 Ошибка загрузки в БД: {exc}")
+
+        elif choice == 3:
+            print("\n🚀 ОБРАБОТКА EXCEL И ЗАГРУЗКА В БД")
+            try:
+                # Сначала обрабатываем Excel
+                students = process_students_from_excel(STUDENTS_INPUT_FILE, STUDENTS_OUTPUT_FILE)
+                print(f"\n✅ Обработка завершена. Получено {len(students)} студентов.")
+                
+                # Затем загружаем в БД
+                if students:
+                    added, skipped = insert_students_to_db(students)
+                    print("\n✅ Загрузка в БД завершена!")
+                    print(f"   📥 Вставлено: {added}")
+                    print(f"   ⏭️  Пропущено: {skipped}")
+                    print(f"   📝 Всего в JSON: {len(students)}")
+            except FileNotFoundError as exc:
+                print(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                print(f"💥 Ошибка обработки: {exc}")
+
+
 def show_main_menu() -> int:
     print("\n" + "=" * 60)
     print("🛠️  УТИЛИТЫ УПРАВЛЕНИЯ БД")
     print("=" * 60)
     print("1 - Действия с мероприятиями")
     print("2 - Действия с направлениями и кластерами")
+    print("3 - Действия со студентами")
     print("9 - Сбросить базу данных")
     print("0 - Выйти")
     print("=" * 60)
-    return _prompt_choice("Выберите режим: ", {0, 1, 2, 9})
+    return _prompt_choice("Выберите режим: ", {0, 1, 2, 3, 9})
 
 
 def run_reset_database() -> None:
@@ -207,6 +289,7 @@ def main() -> None:
     actions: dict[int, Callable[[], None] | None] = {
         1: run_events_menu,
         2: run_directions_menu,
+        3: run_students_menu,
         9: run_reset_database,
     }
 
