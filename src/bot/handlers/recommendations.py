@@ -1,36 +1,70 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from src.core.database.connection import get_db
-from src.core.database.crud.recommendations import get_recommendations_for_student
-from src.core.database.crud.events import get_event_by_id, increment_likes, increment_dislikes
-from src.bot.middlewares.auth_middleware import auth_required
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
+from typing import Any, Mapping, Dict
 
-def format_event_card(event) -> str:
-    """Форматирует карточку мероприятия."""
-    start_date = event.start_date.strftime('%d.%m.%Y') if event.start_date else 'Не указана'
-    end_date = event.end_date.strftime('%d.%m.%Y') if event.end_date else ''
-    
-    date_str = start_date
-    if end_date and start_date != end_date:
-        date_str = f"{start_date} - {end_date}"
-    
-    text = f"🎯 *{event.title}*\n\n"
-    
-    if event.short_description:
-        text += f"{event.short_description}\n\n"
-    
+from src.bot.services.api_client import api_client, APIClientError
+from src.bot.middlewares.auth_middleware import auth_required
+
+def _parse_date(value: Any) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+    return None
+
+
+def _get_value(event: Mapping[str, Any] | Any, attr: str) -> Any:
+    if isinstance(event, Mapping):
+        return event.get(attr)
+    return getattr(event, attr, None)
+
+
+def format_event_card(event: Mapping[str, Any] | Any) -> str:
+    """Форматирует карточку мероприятия, поддерживая словари и ORM объекты."""
+    start_raw = _get_value(event, "start_date")
+    end_raw = _get_value(event, "end_date")
+    start_date = _parse_date(start_raw)
+    end_date = _parse_date(end_raw)
+
+    start_str = start_date.strftime('%d.%m.%Y') if start_date else 'Не указана'
+    end_str = end_date.strftime('%d.%m.%Y') if end_date else ''
+
+    date_str = start_str
+    if end_str and start_str != end_str:
+        date_str = f"{start_str} - {end_str}"
+
+    title = _get_value(event, "title") or "Без названия"
+    short_description = _get_value(event, "short_description")
+    format_value = _get_value(event, "format")
+    link = _get_value(event, "link")
+    likes_count = _get_value(event, "likes_count") or 0
+    dislikes_count = _get_value(event, "dislikes_count") or 0
+
+    text = f"🎯 *{title}*\n\n"
+
+    if short_description:
+        text += f"{short_description}\n\n"
+
     text += f"📅 Дата: {date_str}\n"
-    
-    if event.format:
-        text += f"🎯 Формат: {event.format}\n"
-    
-    if event.link:
-        text += f"🔗 [Регистрация]({event.link})\n"
-    
-    text += f"👍 {event.likes_count} 👎 {event.dislikes_count}"
-    
+
+    if format_value:
+        text += f"🎯 Формат: {format_value}\n"
+
+    if link:
+        text += f"🔗 [Регистрация]({link})\n"
+
+    text += f"👍 {likes_count} 👎 {dislikes_count}"
+
     return text
 
 def get_recommendation_buttons(event_id: str) -> InlineKeyboardMarkup:
@@ -57,41 +91,79 @@ async def show_recommendations(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    db = get_db()
-    try:
-        # Получаем рекомендации для студента
-        recommendations = get_recommendations_for_student(db, student.id, limit=10)
-        
-        if not recommendations:
-            await update.callback_query.edit_message_text(
-                "Пока нет подходящих мероприятий для рекомендаций.\n"
-                "Попробуйте воспользоваться поиском мероприятий!",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")]])
-            )
-            return
-
-        # Берем первую рекомендацию
-        rec = recommendations[0]
-        event = get_event_by_id(db, rec.event_id)
-        
-        if not event:
-            await update.callback_query.edit_message_text(
-                "Ошибка загрузки мероприятия. Попробуйте позже.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
-            )
-            return
-
-        context.user_data['current_recommendations'] = [r.event_id for r in recommendations]
-        context.user_data['current_recommendation_index'] = 0
-
+    student_id = student.get("id")
+    if not student_id:
         await update.callback_query.edit_message_text(
-            format_event_card(event),
-            reply_markup=get_recommendation_buttons(str(event.id)),
-            parse_mode='Markdown',
-            disable_web_page_preview=True
+            "❌ Ошибка: не найден идентификатор студента."
         )
-    finally:
-        db.close()
+        return
+
+    try:
+        student_uuid = UUID(student_id)
+    except (ValueError, TypeError):
+        await update.callback_query.edit_message_text(
+            "Ошибка идентификации студента. Попробуйте авторизоваться заново."
+        )
+        return
+
+    try:
+        recommendations = await api_client.get_recommendations(student_uuid, limit=10)
+    except APIClientError:
+        await update.callback_query.edit_message_text(
+            "Не удалось загрузить рекомендации. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+        )
+        return
+
+    if not recommendations:
+        await update.callback_query.edit_message_text(
+            "Пока нет подходящих мероприятий для рекомендаций.\n"
+            "Попробуйте воспользоваться поиском мероприятий!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Поиск мероприятий", callback_data="event_search")]])
+        )
+        return
+
+    context.user_data['current_recommendations'] = recommendations
+    context.user_data['current_recommendation_index'] = 0
+
+    event_ids = [rec.get("event_id") for rec in recommendations if rec.get("event_id")]
+    events_cache: Dict[str, Any] = {}
+    if event_ids:
+        try:
+            bulk_response = await api_client.get_events_bulk(event_ids)
+            for event in bulk_response.get("events", []):
+                events_cache[str(event["id"])] = event
+        except APIClientError:
+            events_cache = {}
+
+    context.user_data['recommendations_events'] = events_cache
+
+    first_rec = recommendations[0]
+    event_id = first_rec.get("event_id")
+    event = events_cache.get(str(event_id))
+
+    if not event:
+        if event_id:
+            try:
+                event = await api_client.get_event(UUID(event_id))
+            except APIClientError:
+                event = None
+            if event:
+                events_cache[str(event["id"])] = event
+
+    if not event:
+        await update.callback_query.edit_message_text(
+            "Ошибка загрузки мероприятия. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+        )
+        return
+
+    await update.callback_query.edit_message_text(
+        format_event_card(event),
+        reply_markup=get_recommendation_buttons(str(event["id"])),
+        parse_mode='Markdown',
+        disable_web_page_preview=True
+    )
 
 @auth_required
 async def handle_recommendation_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -100,30 +172,45 @@ async def handle_recommendation_feedback(update: Update, context: ContextTypes.D
     await query.answer()
 
     action, event_id_str = query.data.split('_')
-    event_id = UUID(event_id_str)
+    event_uuid = UUID(event_id_str)
 
-    db = get_db()
     try:
         if action == 'like':
-            increment_likes(db, event_id)
+            updated_event = await api_client.like_event(event_uuid)
+            event_cache = context.user_data.get('recommendations_events', {})
+            if isinstance(event_cache, dict) and updated_event:
+                event_cache[str(updated_event["id"])] = updated_event
+                context.user_data['recommendations_events'] = event_cache
             await query.answer("Спасибо! Учтем ваши предпочтения 👍")
         elif action == 'dislike':
-            increment_dislikes(db, event_id)
-            # Показываем следующее мероприятие
+            await api_client.dislike_event(event_uuid)
             await show_next_recommendation(update, context)
             return
+    except APIClientError:
+        await query.answer("Ошибка при обработке запроса. Попробуйте позже.", show_alert=True)
+        return
 
-        # Для лайка остаемся на текущем мероприятии, но обновляем счетчики
-        event = get_event_by_id(db, event_id)
-        if event:
-            await query.edit_message_text(
-                format_event_card(event),
-                reply_markup=get_recommendation_buttons(str(event.id)),
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-    finally:
-        db.close()
+    event_cache = context.user_data.get('recommendations_events', {})
+    event = {}
+    if isinstance(event_cache, dict):
+        event = event_cache.get(str(event_uuid), {})
+
+    if not event:
+        try:
+            event = await api_client.get_event(event_uuid)
+        except APIClientError:
+            event = None
+        if event and isinstance(event_cache, dict):
+            event_cache[str(event["id"])] = event
+            context.user_data['recommendations_events'] = event_cache
+
+    if event:
+        await query.edit_message_text(
+            format_event_card(event),
+            reply_markup=get_recommendation_buttons(str(event["id"])),
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
 
 @auth_required
 async def show_next_recommendation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,20 +229,31 @@ async def show_next_recommendation(update: Update, context: ContextTypes.DEFAULT
     current_index = (current_index + 1) % len(recommendations)
     context.user_data['current_recommendation_index'] = current_index
 
-    event_id = recommendations[current_index]
+    event_id = recommendations[current_index].get("event_id")
+    if not event_id:
+        await show_recommendations(update, context)
+        return
 
-    db = get_db()
-    try:
-        event = get_event_by_id(db, event_id)
+    events_cache = context.user_data.get('recommendations_events', {})
+    event = {}
+    if isinstance(events_cache, dict):
+        event = events_cache.get(str(event_id), {})
+
+    if not event:
+        try:
+            event = await api_client.get_event(UUID(event_id))
+        except APIClientError:
+            event = None
         if not event:
             await show_recommendations(update, context)
             return
+        if isinstance(events_cache, dict):
+            events_cache[str(event["id"])] = event
+            context.user_data['recommendations_events'] = events_cache
 
-        await query.edit_message_text(
-            format_event_card(event),
-            reply_markup=get_recommendation_buttons(str(event.id)),
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-    finally:
-        db.close()
+    await query.edit_message_text(
+        format_event_card(event),
+        reply_markup=get_recommendation_buttons(str(event["id"])),
+        parse_mode='Markdown',
+        disable_web_page_preview=True
+    )

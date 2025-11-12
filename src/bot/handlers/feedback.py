@@ -1,10 +1,8 @@
-from typing import Any, Coroutine
-
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
-from src.core.database.connection import get_db
-from src.core.database.crud.feedback import create_feedback
+
 from src.bot.middlewares.auth_middleware import auth_required
+from src.bot.services.api_client import api_client, APIClientError
 
 # Состояния для ConversationHandler
 WAITING_FEEDBACK_RATING = 1
@@ -108,11 +106,24 @@ async def save_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, comm
             await update.message.reply_text("❌ Ошибка сохранения отзыва.")
         return
 
-    db = get_db()
+    student_id = student.get("id") if isinstance(student, dict) else getattr(student, "id", None)
+    if not student_id:
+        if update.message:
+            await update.message.reply_text("❌ Ошибка сохранения отзыва.")
+        return
+
     try:
-        create_feedback(db, student.id, rating, comment)
-    finally:
-        db.close()
+        await api_client.submit_feedback(student_id=student_id, rating=rating, comment=comment)
+    except APIClientError:
+        error_text = "❌ Не удалось сохранить отзыв. Попробуйте позже."
+        if update.message:
+            await update.message.reply_text(error_text)
+        else:
+            await update.callback_query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu")]])
+            )
+        return
 
     stars = "⭐" * rating
     text = (

@@ -5,6 +5,7 @@ from typing import Optional
 class Settings(BaseSettings):
     bot_token: Optional[str] = None
     database_url: str = "sqlite+aiosqlite:///./test.db"
+    internal_api_url: str = "http://localhost:8000"
     log_level: str = "INFO"
 
     class Config:
