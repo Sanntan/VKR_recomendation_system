@@ -1,4 +1,5 @@
 import axios from "axios";
+import { handleApiError } from "../services/errorHandler.js";
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -13,6 +14,24 @@ export const maintenanceApi = axios.create({
   baseURL: defaultBaseUrl,
   timeout: 600000 // 10 минут для операций с ML моделями и кластеризацией
 });
+
+// Добавляем interceptor для обработки ошибок
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const appError = handleApiError(error);
+    // Можно добавить глобальную обработку ошибок здесь
+    return Promise.reject(appError);
+  }
+);
+
+maintenanceApi.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const appError = handleApiError(error);
+    return Promise.reject(appError);
+  }
+);
 
 export async function checkHealth() {
   const response = await api.get("/health");

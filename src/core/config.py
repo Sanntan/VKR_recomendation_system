@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     internal_api_url: str = "http://localhost:8000"
     admin_cors_origins: List[str] = ["http://localhost:5173"]
     log_level: str = "INFO"
+    
+    # Sentry настройки
+    sentry_dsn: Optional[str] = None
+    sentry_environment: str = "development"
+    sentry_traces_sample_rate: float = 0.1  # 10% запросов для трейсинга
+    sentry_profiles_sample_rate: float = 0.1
 
     class Config:
         env_file = ".env"

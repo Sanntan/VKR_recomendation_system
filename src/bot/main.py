@@ -1,10 +1,15 @@
 import logging
 from typing import Optional
+import traceback
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from telegram.request import BaseRequest
+from telegram.error import TelegramError
+
 from src.core.config import settings
+from src.core.logging_config import setup_logging, get_logger
+from src.core.sentry_config import init_sentry
 from src.bot.middlewares.auth_middleware import AuthMiddleware
 from src.bot.handlers.start import start_handler, handle_participant_id_input
 from src.bot.handlers.common import help_handler, cancel_handler, unknown_command_handler
@@ -21,16 +26,63 @@ from src.bot.handlers.feedback import (
 )
 
 # Настройка логирования
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=getattr(logging, settings.log_level.upper())
+setup_logging(
+    level=settings.log_level,
+    service_name="vkr.bot"
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Инициализация Sentry
+init_sentry()
 
 
 async def _log_error(update: object, context) -> None:  # type: ignore[no-untyped-def]
-    """Стандартный обработчик ошибок Telegram Application."""
-    logger.error("Ошибка при обработке обновления %s: %s", update, context.error)
+    """Улучшенный обработчик ошибок Telegram Application."""
+    error = context.error
+    error_type = type(error).__name__
+    
+    # Получаем информацию об обновлении
+    update_info = {}
+    if isinstance(update, Update):
+        if update.message:
+            update_info = {
+                "message_id": update.message.message_id,
+                "chat_id": update.message.chat.id,
+                "user_id": update.message.from_user.id if update.message.from_user else None,
+            }
+        elif update.callback_query:
+            update_info = {
+                "callback_query_id": update.callback_query.id,
+                "chat_id": update.callback_query.message.chat.id if update.callback_query.message else None,
+                "user_id": update.callback_query.from_user.id if update.callback_query.from_user else None,
+            }
+    
+    logger.error(
+        f"Ошибка при обработке обновления: {error_type}: {str(error)}",
+        extra={
+            "error_type": error_type,
+            "error_message": str(error),
+            "update_info": update_info,
+            "traceback": traceback.format_exc(),
+        },
+        exc_info=True
+    )
+    
+    # Пытаемся уведомить пользователя об ошибке
+    if isinstance(update, Update) and error and not isinstance(error, TelegramError):
+        try:
+            if update.message:
+                await update.message.reply_text(
+                    "❌ Произошла ошибка при обработке вашего запроса. "
+                    "Попробуйте позже или используйте команду /menu для возврата в главное меню."
+                )
+            elif update.callback_query:
+                await update.callback_query.answer(
+                    "❌ Произошла ошибка. Попробуйте позже.",
+                    show_alert=True
+                )
+        except Exception as notify_error:
+            logger.warning(f"Не удалось уведомить пользователя об ошибке: {notify_error}")
 
 
 def build_application(
