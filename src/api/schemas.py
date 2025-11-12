@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, date
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Dict
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class DirectionSchema(BaseModel):
@@ -114,3 +114,38 @@ class FavoriteWithEventSchema(BaseModel):
     created_at: datetime
     event: EventSchema
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentProfileUpdateSchema(BaseModel):
+    """
+    Схема для обновления профильного вектора студента на основе компетенций.
+    Компетенции не сохраняются в БД, используются только для генерации вектора профиля.
+    """
+    competencies: Dict[str, int] = Field(
+        ...,
+        description="Словарь компетенций: название компетенции -> т-балл (200-800). Используется для генерации вектора профиля.",
+        examples=[{
+            "Анализ информации": 650,
+            "Планирование": 720,
+            "Коммуникация": 350,
+            "Лидерство": 450,
+            "Креативность": 680
+        }]
+    )
+    specialty: Optional[str] = Field(
+        None,
+        description="Название специальности (направления подготовки). Если указано, обновит направление студента и будет использовано при генерации вектора профиля."
+    )
+
+    @field_validator('competencies')
+    @classmethod
+    def validate_competencies(cls, v: Dict[str, int]) -> Dict[str, int]:
+        """Валидация т-баллов компетенций."""
+        for competency_name, t_score in v.items():
+            if not isinstance(t_score, int):
+                raise ValueError(f"Т-балл для '{competency_name}' должен быть целым числом")
+            if not (200 <= t_score <= 800):
+                raise ValueError(
+                    f"Т-балл для '{competency_name}' должен быть в диапазоне 200-800, получено: {t_score}"
+                )
+        return v
